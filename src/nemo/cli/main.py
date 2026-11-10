@@ -672,6 +672,80 @@ def ide_open_file(
         sys.exit(1)
 
 
+# --- Worker Commands ---
+@worker_app.command("run")
+def worker_run(
+    once: bool = typer.Option(False, "--once", "-1", help="Run single maintenance pass (indexing, graph sync, memory consolidation) and exit."),
+) -> None:
+    """Run background maintenance worker for codebase indexing and memory consolidation."""
+    async def _run():
+        if once:
+            console.print("[bold cyan]Running one-shot maintenance pass...[/bold cyan]")
+            worker = BackgroundWorker()
+            job1 = worker.enqueue("indexing", {"path": Path.cwd(), "force": False})
+            job2 = worker.enqueue("graph_sync", {"project_name": Path.cwd().name, "path": Path.cwd()})
+            job3 = worker.enqueue("memory_consolidation", {})
+            worker.start()
+
+            for _ in range(40):
+                await asyncio.sleep(0.5)
+                if all(j.status in ("completed", "failed") for j in [job1, job2, job3]):
+                    break
+            await worker.stop()
+
+            table = Table(title="Maintenance Pass Summary", border_style="cyan")
+            table.add_column("Task", style="bold cyan", width=24)
+            table.add_column("Status", width=12)
+            table.add_column("Result", style="white")
+
+            for j in [job1, job2, job3]:
+                status_color = "green" if j.status == "completed" else "red"
+                table.add_row(j.name, f"[{status_color}]{j.status.upper()}[/{status_color}]", str(j.result or j.error))
+
+            console.print(table)
+        else:
+            console.print("[bold cyan]Starting continuous background worker (Press Ctrl+C to stop)...[/bold cyan]")
+            worker = BackgroundWorker()
+            worker.start()
+            try:
+                while True:
+                    await asyncio.sleep(1)
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                await worker.stop()
+                console.print("[green]Worker stopped.[/green]")
+
+    asyncio.run(_run())
+
+
+@worker_app.command("index")
+def worker_index(
+    path: str = typer.Option(".", "--path", "-p", help="Directory path to index."),
+    force: bool = typer.Option(False, "--force", "-f", help="Force full re-index."),
+) -> None:
+    """Trigger background indexing task."""
+    async def _index():
+        from nemo.worker.tasks import task_run_indexing
+        with console.status("[bold cyan]Running indexing task..."):
+            report = await task_run_indexing(workspace_path=path, force=force)
+        console.print(f"[green]Indexed {report.indexed_files} files ({report.total_files} total) in {report.duration_ms}ms[/green]")
+
+    asyncio.run(_index())
+
+
+@worker_app.command("consolidate")
+def worker_consolidate(
+    project_id: str | None = typer.Option(None, "--project-id", help="Optional project ID scope."),
+) -> None:
+    """Run memory consolidation and deduplication pass."""
+    async def _consolidate():
+        from nemo.worker.tasks import task_consolidate_memories
+        with console.status("[bold cyan]Consolidating and deduplicating memories..."):
+            res = await task_consolidate_memories(project_id=project_id)
+        console.print(f"[green]Checked {res['total_checked']} memories; archived {res['duplicates_archived']} duplicates.[/green]")
+
+    asyncio.run(_consolidate())
+
+
 # --- Autonomous Agent Commands ---
 @app.command()
 def task(
@@ -705,6 +779,11 @@ def task(
             ans = parsed["answer"]
         console.print("\n[bold]Final Outcome:[/bold]\n")
         console.print(Markdown(ans))
+
+        if state.extracted_memories:
+            console.print("\n[bold cyan]🧠 Auto-Learned Project Knowledge Added to Memory:[/bold cyan]")
+            for m in state.extracted_memories:
+                console.print(f" • [green]{m['content']}[/green] [dim]({m['type']})[/dim]")
 
     asyncio.run(_run_agent())
 
@@ -833,7 +912,22 @@ def ask(
 
 
 # 6. Public exports
-__all__ = ["app"]
+__all__ = ["app", "main"]
+
+
+def main() -> None:
+    """CLI entrypoint with automatic natural language prompt routing."""
+    known_commands = {
+        "chat", "setup", "version", "status", "doctor", "run", "daemon",
+        "sessions", "memory", "project", "index", "ide", "worker", "task",
+        "dependencies", "verify", "diagnose", "ask", "remember",
+        "--help", "-h", "--version", "-v",
+    }
+    if len(sys.argv) > 1 and sys.argv[1] not in known_commands and not sys.argv[1].startswith("-"):
+        prompt_text = " ".join(sys.argv[1:])
+        sys.argv = [sys.argv[0], "task", prompt_text]
+    app()
+
 
 if __name__ == "__main__":
-    app()
+    main()

@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.scripts]
-nemo = "nemo.cli.main:app"
+nemo = "nemo.cli.main:main"
 
 [build-system]
 requires = ["hatchling"]

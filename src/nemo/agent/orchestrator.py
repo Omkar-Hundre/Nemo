@@ -264,6 +264,24 @@ class AgentOrchestrator:
             state.completed = True
             state.final_answer = final_res.content
 
+        # Automated Memory Consolidation: Extract durable technical facts from completed task
+        if state.completed and state.final_answer:
+            try:
+                from nemo.memory.extractor import MemoryExtractor
+                extractor = MemoryExtractor(provider=self.provider, repository=self.memory)
+                new_mems = await extractor.extract_and_persist(
+                    objective=objective,
+                    observations=state.tool_history,
+                    outcome=state.final_answer,
+                    project_id=project_id,
+                )
+                state.extracted_memories = [
+                    {"id": m.id, "content": m.content, "type": m.type}
+                    for m in new_mems
+                ]
+            except Exception:
+                pass
+
         return state
 
     async def diagnose_error(self, failed_command: str, exit_code: int, stdout: str, stderr: str) -> str:

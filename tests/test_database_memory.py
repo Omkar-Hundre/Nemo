@@ -3,6 +3,7 @@
 # 1. Standard library imports
 import asyncio
 from contextlib import asynccontextmanager
+import json
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -380,6 +381,46 @@ async def test_database_schema_evolution_and_backup_restore(monkeypatch):
         assert count == 1, "Backup restoration must restore all data intact"
 
 
+@pytest.mark.asyncio
+async def test_automated_memory_extraction():
+    """Verify that MemoryExtractor parses LLM extraction and persists deduplicated memories."""
+    async with create_test_db() as db:
+        mem_repo: MemoryRepository = db["mem_repo"]
+
+        class MockNimProvider:
+            async def generate(self, messages, **kwargs):
+                from nemo.ai.schemas import LLMResponse
+                content = json.dumps([
+                    {"content": "Frontend is built with React 19 and Tailwind", "type": "decision", "importance": 1.0, "subject": "frontend"},
+                    {"content": "Dev server default port is 5173", "type": "fact", "importance": 0.9, "subject": "networking"},
+                ])
+                return LLMResponse(content=content, model="nemotron-mock")
+
+        from nemo.memory.extractor import MemoryExtractor
+        extractor = MemoryExtractor(provider=MockNimProvider(), repository=mem_repo)
+
+        # 1. First run: extracts and persists 2 memories
+        new_mems = await extractor.extract_and_persist(
+            objective="Setup React frontend",
+            observations=[{"tool": "scaffold_project", "success": True}],
+            outcome="React app scaffolded successfully on port 5173",
+        )
+        assert len(new_mems) == 2
+        assert new_mems[0].metadata_.get("auto_extracted") is True
+
+        # 2. Second run with same facts: deduplication must prevent re-inserting identical memories
+        duplicate_run = await extractor.extract_and_persist(
+            objective="Inspect React frontend",
+            observations=[{"tool": "inspect_project_environment", "success": True}],
+            outcome="Frontend is built with React 19 and Tailwind",
+        )
+        assert len(duplicate_run) == 0
+
+        # 3. Total memories in repo remains 2
+        all_stored = await mem_repo.list_memories()
+        assert len(all_stored) == 2
+
+
 # 6. Public exports
 __all__ = [
     "create_test_db",
@@ -390,4 +431,5 @@ __all__ = [
     "test_concurrent_memory_writes",
     "test_edge_cases_and_sanitization",
     "test_database_schema_evolution_and_backup_restore",
+    "test_automated_memory_extraction",
 ]
