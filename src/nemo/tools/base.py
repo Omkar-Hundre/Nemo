@@ -37,3 +37,4 @@ class BaseTool(Protocol):
 
 # 6. Public exports
 __all__ = ["BaseTool", "ToolDefinition"]
+

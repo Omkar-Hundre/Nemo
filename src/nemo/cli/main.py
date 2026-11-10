@@ -3,6 +3,7 @@
 # 1. Standard library imports
 import asyncio
 from pathlib import Path
+import subprocess
 import sys
 
 # 2. Third-party imports
@@ -10,6 +11,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 import typer
+import uvicorn
 
 # 3. Local / internal imports
 from nemo import __version__
@@ -17,7 +19,10 @@ from nemo.agent.orchestrator import AgentOrchestrator
 from nemo.ai.providers.nvidia import NvidiaNimProvider
 from nemo.ai.schemas import ChatMessage
 from nemo.cli.doctor import run_doctor
+from nemo.cli.setup import run_setup_wizard
 from nemo.config.settings import get_settings
+from nemo.daemon.client import DaemonClient
+from nemo.daemon.server import app as daemon_fastapi_app
 from nemo.database.connection import init_db, resolve_database_url
 from nemo.execution.sessions.manager import SessionManager
 from nemo.execution.shells.native import NativeSubprocessExecutor
@@ -54,18 +59,24 @@ ide_app = typer.Typer(
     name="ide",
     help="Detect and coordinate with code editors (Antigravity, VS Code).",
 )
+daemon_app = typer.Typer(
+    name="daemon",
+    help="Manage local background daemon server.",
+)
 
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(memory_app, name="memory")
 app.add_typer(project_app, name="project")
 app.add_typer(index_app, name="index")
 app.add_typer(ide_app, name="ide")
+app.add_typer(daemon_app, name="daemon")
 
 console = Console()
 session_mgr = SessionManager()
 memory_repo = MemoryRepository()
 project_repo = ProjectRepository()
 ide_registry = IDERegistry()
+daemon_client = DaemonClient()
 
 
 @app.command()
@@ -75,17 +86,28 @@ def version() -> None:
 
 
 @app.command()
+def setup(
+    api_key: str | None = typer.Option(None, "--api-key", "-k", help="NVIDIA NIM API key (starts with nvapi-)."),
+) -> None:
+    """Run full interactive setup and verification wizard."""
+    asyncio.run(run_setup_wizard(custom_key=api_key))
+
+
+@app.command()
 def status() -> None:
     """Display current system and environment status (fast, local only)."""
     settings = get_settings()
     has_key = bool(settings.nvidia_api_key and settings.nvidia_api_key.startswith("nvapi-"))
     db_url = resolve_database_url()
+    daemon_online = asyncio.run(daemon_client.is_running())
+
     content = (
         f"[bold]Version:[/bold] {__version__}\n"
         f"[bold]Shell:[/bold] {settings.default_shell}\n"
         f"[bold]IDE:[/bold] {settings.default_ide}\n"
         f"[bold]Workspace:[/bold] {settings.workspace_root}\n"
         f"[bold]Database:[/bold] {db_url}\n"
+        f"[bold]Daemon:[/bold] {'[green]ONLINE[/green] (http://127.0.0.1:8765)' if daemon_online else '[dim]OFFLINE[/dim]'}\n"
         f"[bold]Model:[/bold] {settings.nvidia_model}\n"
         f"[bold]API Key:[/bold] {'[green]Configured[/green]' if has_key else '[red]Missing[/red]'}"
     )
@@ -137,6 +159,48 @@ def run(
     if not result.is_success:
         console.print(f"[bold red]Exit code: {result.exit_code}[/bold red]")
         sys.exit(result.exit_code)
+
+
+# --- Daemon Commands ---
+@daemon_app.command("start")
+def daemon_start(
+    port: int = typer.Option(8765, "--port", "-p", help="Port for local daemon server."),
+    detach: bool = typer.Option(False, "--detach", "-d", help="Run detached in background."),
+) -> None:
+    """Start local background daemon server."""
+    if detach:
+        cmd = [sys.executable, "-m", "uvicorn", "nemo.daemon.server:app", "--port", str(port), "--host", "127.0.0.1"]
+        proc = subprocess.Popen(
+            cmd,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        console.print(f"[green]Daemon started in background (PID {proc.pid}) at http://127.0.0.1:{port}[/green]")
+        return
+
+    console.print(f"[bold cyan]Starting NEMO Daemon on http://127.0.0.1:{port}...[/bold cyan]")
+    uvicorn.run(daemon_fastapi_app, host="127.0.0.1", port=port, log_level="info")
+
+
+@daemon_app.command("status")
+def daemon_status() -> None:
+    """Check if local daemon is running and display metrics."""
+    running = asyncio.run(daemon_client.is_running())
+    if not running:
+        console.print("[dim]Daemon is OFFLINE.[/dim]")
+        return
+
+    info = asyncio.run(daemon_client.get_status())
+    console.print(Panel(
+        f"[bold green]Daemon is ONLINE[/bold green]\n"
+        f"Version: {info.get('version')}\n"
+        f"Workspace: {info.get('workspace_root')}\n"
+        f"Active Sessions: {info.get('active_sessions_count')}\n"
+        f"Total Sessions: {info.get('total_sessions_count')}",
+        title="[bold cyan]NEMO Daemon[/bold cyan]",
+        border_style="green",
+    ))
 
 
 # --- Sessions Commands ---
@@ -402,7 +466,7 @@ def ide_open_file(
         sys.exit(1)
 
 
-# --- Autonomous Agent Commands (Phase 8 & 9) ---
+# --- Autonomous Agent Commands ---
 @app.command()
 def task(
     objective: str = typer.Argument(..., help="High-level objective for autonomous agent."),

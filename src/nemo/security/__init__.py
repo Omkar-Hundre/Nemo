@@ -17,3 +17,4 @@ from nemo.security.policy import DANGEROUS_COMMAND_PATTERNS, SecurityPolicy
 
 # 6. Public exports
 __all__ = ["SecurityPolicy", "DANGEROUS_COMMAND_PATTERNS"]
+
