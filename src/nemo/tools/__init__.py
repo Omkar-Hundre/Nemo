@@ -11,6 +11,8 @@ from nemo.tools.base import BaseTool, ToolDefinition
 from nemo.tools.builtin import (
     CodebaseSummaryTool,
     CodeSearchTool,
+    CreateFolderTool,
+    DeployAnalysisTool,
     IDEOpenTool,
     ListDirectoryTool,
     MemoryRecallTool,
@@ -39,7 +41,9 @@ __all__ = [
     "SemanticSearchTool",
     "TerminalTool",
     "ReadFileTool",
+    "CreateFolderTool",
     "WriteFileTool",
+    "DeployAnalysisTool",
     "ListDirectoryTool",
     "MemoryRecallTool",
     "IDEOpenTool",

@@ -65,8 +65,19 @@ class OutcomeVerifier:
             diagnostics={"size_bytes": stat.st_size, "path": str(target)},
         )
 
-    async def verify_test_suite_passes(self) -> VerificationResult:
+    async def verify_test_suite_passes(self, modified_files: list[str] | None = None) -> VerificationResult:
         """Run project validation/test suite to verify no regressions were introduced."""
+        # Fast exit: skip test suite if changes are purely content, markup, docs, or web assets
+        if modified_files is not None:
+            code_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".cpp", ".c"}
+            has_code_changes = any(Path(f).suffix.lower() in code_extensions for f in modified_files)
+            if not has_code_changes:
+                return VerificationResult(
+                    verified=True,
+                    ground_truth_source="test_suite",
+                    details="No source code files modified; skipped test runner for non-code artifacts.",
+                )
+
         ecosystems = PackageManagerDetector.detect(self.workspace_root)
         if not ecosystems:
             return VerificationResult(
@@ -77,7 +88,7 @@ class OutcomeVerifier:
 
         eco = ecosystems[0]
         test_cmd = eco.validate_command
-        result = await self.executor.execute(test_cmd, cwd=self.workspace_root, timeout_seconds=120.0)
+        result = await self.executor.execute(test_cmd, cwd=self.workspace_root, timeout_seconds=60.0)
 
         return VerificationResult(
             verified=result.is_success,

@@ -15,6 +15,8 @@ from nemo.tools.builtin import (
     CodebaseSummaryTool,
     CodeGraphQueryTool,
     CodeSearchTool,
+    CreateFolderTool,
+    DeployAnalysisTool,
     DocumentGeneratorTool,
     DocumentReaderTool,
     EnvConfigInspectorTool,
@@ -65,6 +67,7 @@ class ToolRegistry:
         self.register(LaunchBackgroundProcessTool())
         self.register(ManageBackgroundProcessTool())
         self.register(ReadFileTool())
+        self.register(CreateFolderTool(policy=self.policy))
         self.register(WriteFileTool(policy=self.policy))
         self.register(ListDirectoryTool())
         self.register(FindFilesTool())
@@ -73,6 +76,7 @@ class ToolRegistry:
 
         # 3. Environment, Network, Scaffolding & Process Management
         self.register(ProjectEnvironmentTool())
+        self.register(DeployAnalysisTool())
         self.register(HttpProbeTool())
         self.register(PortManagerTool())
         self.register(ScaffoldProjectTool())

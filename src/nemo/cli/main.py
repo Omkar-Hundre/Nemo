@@ -36,7 +36,7 @@ from nemo.execution.shells.native import NativeSubprocessExecutor
 from nemo.intelligence.indexer import ProjectIndexer
 from nemo.intelligence.packages import PackageManagerDetector
 from nemo.integrations.ide.registry import IDERegistry
-from nemo.memory.repository import MemoryRepository, ProjectRepository
+from nemo.memory.repository import ConversationRepository, MemoryRepository, ProjectRepository
 from nemo.worker.service import BackgroundWorker
 
 # 4. Types, Protocols, Schemas
@@ -76,6 +76,10 @@ worker_app = typer.Typer(
     name="worker",
     help="Manage background maintenance and indexing worker.",
 )
+history_app = typer.Typer(
+    name="history",
+    help="Inspect, list, and manage conversation and task sessions.",
+)
 
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(memory_app, name="memory")
@@ -84,6 +88,7 @@ app.add_typer(index_app, name="index")
 app.add_typer(ide_app, name="ide")
 app.add_typer(daemon_app, name="daemon")
 app.add_typer(worker_app, name="worker")
+app.add_typer(history_app, name="history")
 
 console = Console()
 session_mgr = SessionManager()
@@ -746,11 +751,113 @@ def worker_consolidate(
     asyncio.run(_consolidate())
 
 
+# --- Conversation & History Commands ---
+@history_app.command("list")
+def history_list(
+    limit: int = typer.Option(20, "--limit", "-n", help="Maximum conversation sessions to list."),
+) -> None:
+    """List recent conversation sessions and autonomous task history."""
+    async def _list():
+        await init_db()
+        repo = ConversationRepository()
+        convs = await repo.list_conversations(limit=limit)
+        if not convs:
+            console.print("[dim]No conversation history found.[/dim]")
+            return
+
+        table = Table(title="Conversation & Task History", border_style="cyan")
+        table.add_column("Session ID", style="bold cyan", width=12)
+        table.add_column("Title / Objective", style="white")
+        table.add_column("Started", style="dim", width=18)
+        table.add_column("Messages", justify="right", width=10)
+
+        for c in convs:
+            started = c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "-"
+            msg_count = str(len(c.messages)) if c.messages else "0"
+            table.add_row(c.id[:8], c.title, started, msg_count)
+
+        console.print(table)
+        console.print("[dim]To view session messages: nemo history show <id>[/dim]")
+        console.print("[dim]To resume a session:      nemo resume <id>[/dim]")
+
+    asyncio.run(_list())
+
+
+@history_app.command("show")
+def history_show(
+    conversation_id: str = typer.Argument(..., help="Conversation ID (or prefix) to inspect."),
+) -> None:
+    """Show transcript of a conversation session."""
+    async def _show():
+        await init_db()
+        repo = ConversationRepository()
+        convs = await repo.list_conversations(limit=100)
+        matched = [c for c in convs if c.id.startswith(conversation_id)]
+        if not matched:
+            console.print(f"[red]No conversation found matching '{conversation_id}'[/red]")
+            return
+
+        c = matched[0]
+        console.print(Panel(f"[bold cyan]Session:[/bold cyan] {c.title}\n[dim]ID: {c.id} | Created: {c.created_at}[/dim]", border_style="cyan"))
+
+        messages = await repo.get_messages(c.id, limit=100)
+        for msg in messages:
+            role_style = "bold green" if msg.role == "user" else "bold blue"
+            console.print(f"[{role_style}]{msg.role.upper()}:[/{role_style}]")
+            console.print(msg.content)
+            console.print("[dim]" + "─" * 40 + "[/dim]")
+
+    asyncio.run(_show())
+
+
+@history_app.command("delete")
+def history_delete(
+    conversation_id: str = typer.Argument(..., help="Conversation ID to delete."),
+) -> None:
+    """Delete a conversation session and all its messages."""
+    async def _del():
+        await init_db()
+        repo = ConversationRepository()
+        convs = await repo.list_conversations(limit=100)
+        matched = [c for c in convs if c.id.startswith(conversation_id)]
+        if not matched:
+            console.print(f"[red]No conversation found matching '{conversation_id}'[/red]")
+            return
+        c = matched[0]
+        deleted = await repo.delete_conversation(c.id)
+        if deleted:
+            console.print(f"[green]Deleted conversation {c.id[:8]} ({c.title})[/green]")
+        else:
+            console.print(f"[red]Failed to delete conversation.[/red]")
+
+    asyncio.run(_del())
+
+
+@app.command("resume")
+def resume(
+    conversation_id: str = typer.Argument(..., help="Conversation ID or prefix to resume."),
+) -> None:
+    """Resume interactive chat session with context and memory from a previous conversation."""
+    from nemo.cli.chat import run_interactive_chat
+    async def _resume():
+        await init_db()
+        repo = ConversationRepository()
+        convs = await repo.list_conversations(limit=100)
+        matched = [c for c in convs if c.id.startswith(conversation_id)]
+        if not matched:
+            console.print(f"[red]No conversation found matching '{conversation_id}'[/red]")
+            return
+        await run_interactive_chat(initial_conversation_id=matched[0].id)
+
+    asyncio.run(_resume())
+
+
 # --- Autonomous Agent Commands ---
 @app.command()
 def task(
     objective: str = typer.Argument(..., help="High-level objective for autonomous agent."),
     max_steps: int = typer.Option(15, "--max-steps", "-m", help="Maximum execution steps."),
+    conversation_id: str | None = typer.Option(None, "--conversation-id", "-c", help="Optional conversation ID to resume."),
 ) -> None:
     """Run autonomous multi-step agent workflow with tool execution and ground-truth verification."""
     async def _run_agent():
@@ -759,7 +866,11 @@ def task(
         console.print(f"[bold cyan]Starting task:[/bold cyan] {objective}")
 
         with console.status("[bold green]Deliberating, executing, and verifying..."):
-            state = await orchestrator.run(objective=objective, max_iterations=max_steps)
+            state = await orchestrator.run(
+                objective=objective,
+                max_iterations=max_steps,
+                conversation_id=conversation_id,
+            )
 
         console.print("\n[bold]Execution Steps:[/bold]")
         for record in state.tool_history:
@@ -920,6 +1031,7 @@ def main() -> None:
     known_commands = {
         "chat", "setup", "version", "status", "doctor", "run", "daemon",
         "sessions", "memory", "project", "index", "ide", "worker", "task",
+        "history", "resume",
         "dependencies", "verify", "diagnose", "ask", "remember",
         "--help", "-h", "--version", "-v",
     }

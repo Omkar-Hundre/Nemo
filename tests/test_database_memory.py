@@ -16,7 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 # 3. Local / internal imports
 from nemo.database.connection import backup_database, init_db, restore_database
 from nemo.database.models import Base, Conversation, MemoryItem, Project
-from nemo.memory.repository import MemoryRepository, ProjectRepository
+from nemo.memory.repository import (
+    ConversationRepository,
+    MemoryRepository,
+    ProjectRepository,
+    TaskRepository,
+)
 
 # 4. Types, Protocols, Schemas
 # (None)
@@ -47,6 +52,8 @@ async def create_test_db():
             "session_provider": session_provider,
             "proj_repo": ProjectRepository(session_provider=session_provider),
             "mem_repo": MemoryRepository(session_provider=session_provider),
+            "conv_repo": ConversationRepository(session_provider=session_provider),
+            "task_repo": TaskRepository(session_provider=session_provider),
         }
 
         await engine.dispose()
@@ -421,6 +428,52 @@ async def test_automated_memory_extraction():
         assert len(all_stored) == 2
 
 
+@pytest.mark.asyncio
+async def test_conversation_repository_and_multi_turn_continuity():
+    """Verify ConversationRepository creates sessions, appends messages, lists history, and cascades deletion."""
+    async with create_test_db() as db:
+        conv_repo: ConversationRepository = db["conv_repo"]
+        task_repo: TaskRepository = db["task_repo"]
+
+        # 1. Create conversation session
+        conv = await conv_repo.create_conversation(title="Refactor Authentication Service")
+        assert conv.id is not None
+        assert conv.title == "Refactor Authentication Service"
+
+        # 2. Add multi-turn messages
+        msg1 = await conv_repo.add_message(conv.id, "user", "Inspect auth controller")
+        msg2 = await conv_repo.add_message(conv.id, "assistant", "Auth controller uses JWT tokens.")
+        msg3 = await conv_repo.add_message(conv.id, "user", "Change expiration to 24 hours")
+        msg4 = await conv_repo.add_message(conv.id, "assistant", "Updated JWT expiration to 86400 seconds.")
+
+        # 3. Retrieve messages
+        msgs = await conv_repo.get_messages(conv.id)
+        assert len(msgs) == 4
+        assert msgs[0].content == "Inspect auth controller"
+        assert msgs[3].content == "Updated JWT expiration to 86400 seconds."
+
+        # 4. List conversations
+        conv_list = await conv_repo.list_conversations()
+        assert len(conv_list) == 1
+        assert conv_list[0].id == conv.id
+        assert len(conv_list[0].messages) == 4
+
+        # 5. Record task audit
+        task = await task_repo.record_task(objective="Update JWT expiration", thread_id=conv.id)
+        assert task.id is not None
+        tasks = await task_repo.list_tasks()
+        assert len(tasks) == 1
+        assert tasks[0].thread_id == conv.id
+
+        # 6. Delete conversation cascades messages
+        deleted = await conv_repo.delete_conversation(conv.id)
+        assert deleted is True
+        remaining = await conv_repo.get_conversation(conv.id)
+        assert remaining is None
+        remaining_msgs = await conv_repo.get_messages(conv.id)
+        assert len(remaining_msgs) == 0
+
+
 # 6. Public exports
 __all__ = [
     "create_test_db",
@@ -432,4 +485,5 @@ __all__ = [
     "test_edge_cases_and_sanitization",
     "test_database_schema_evolution_and_backup_restore",
     "test_automated_memory_extraction",
+    "test_conversation_repository_and_multi_turn_continuity",
 ]

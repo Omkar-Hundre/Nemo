@@ -34,11 +34,25 @@ class SecurityPolicy:
         base = Path(base_dir).resolve() if base_dir else self.workspace_root
         p = Path(path)
         target = (base / p).resolve() if not p.is_absolute() else p.resolve()
-        try:
-            target.relative_to(self.workspace_root)
-            return True
-        except ValueError:
-            return False
+
+        # Check workspace boundary and base execution directory
+        for root in [self.workspace_root, base]:
+            try:
+                target.relative_to(root)
+                return True
+            except ValueError:
+                continue
+
+        # Allow user working directories (Downloads, Desktop, Documents)
+        user_home = Path.home()
+        for u_dir in (user_home / "Downloads", user_home / "Desktop", user_home / "Documents"):
+            try:
+                target.relative_to(u_dir)
+                return True
+            except ValueError:
+                continue
+
+        return False
 
     def assess_command_risk(self, command: str) -> RiskLevel:
         """Classify shell command risk based on side effects."""
@@ -51,18 +65,23 @@ class SecurityPolicy:
 
         # L0: Pure read-only/inspection commands
         read_prefixes = (
-            "git status", "git log", "git diff", "git branch",
+            "git status", "git log", "git diff", "git branch", "git remote",
             "dir", "ls", "python --version", "node --version",
             "npm --version", "uv --version", "pytest --version",
+            "netlify status", "ntl status", "netlify sites:list",
+            "vercel status", "vercel whoami", "gh repo view", "gh pr list",
             "Get-ChildItem", "Get-Content", "Get-Date", "whoami",
         )
         if any(cmd_clean.startswith(p) for p in read_prefixes):
             return RiskLevel.L0
 
-        # L1: Build, test, package operations in trusted project
+        # L1: Build, test, package, and standard deployment operations in trusted project
         routine_prefixes = (
             "pytest", "npm test", "npm run build", "python -m unittest",
             "cargo test", "cargo build", "uv run", "pip list",
+            "git add", "git commit", "git push", "git pull", "git checkout",
+            "netlify build", "netlify deploy", "ntl deploy", "vercel build", "vercel deploy",
+            "gh pr status", "gh pr create",
         )
         if any(cmd_clean.startswith(p) for p in routine_prefixes):
             return RiskLevel.L1
@@ -80,8 +99,14 @@ class SecurityPolicy:
         ctx = context or {}
         base_dir = ctx.get("working_directory", self.workspace_root)
 
-        if tool_name in ("read_file", "list_directory", "memory_recall", "ide_detect"):
+        if tool_name in (
+            "read_file", "list_directory", "memory_recall", "ide_detect",
+            "analyze_deployment", "get_codebase_summary", "search_code",
+            "lookup_symbol", "semantic_search", "find_files", "http_probe",
+        ):
             return RiskLevel.L0
+        if tool_name == "create_folder":
+            return RiskLevel.L1
         if tool_name == "terminal_execute":
             cmd = arguments.get("command", "")
             return self.assess_command_risk(cmd)
@@ -90,7 +115,7 @@ class SecurityPolicy:
             if not self.is_path_safe(target, base_dir=base_dir):
                 return RiskLevel.L3
             return RiskLevel.L2
-        if tool_name in ("ide_open", "ide_open_file"):
+        if tool_name in ("ide_open", "ide_open_file", "open_browser"):
             return RiskLevel.L0
 
         return RiskLevel.L2

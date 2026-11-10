@@ -15,7 +15,7 @@ from nemo.agent.state import AgentState
 from nemo.agent.verifier import OutcomeVerifier
 from nemo.ai.providers.nvidia import NvidiaNimProvider
 from nemo.ai.schemas import ChatMessage
-from nemo.memory.repository import MemoryRepository
+from nemo.memory.repository import ConversationRepository, MemoryRepository, TaskRepository
 from nemo.tools.registry import ToolRegistry
 
 # 4. Types, Protocols, Schemas
@@ -38,6 +38,10 @@ Core Principles & Rules:
    - For relationship & caller inspection: invoke `query_code_graph` to see who calls a symbol or what modules depend on it.
    - For structural AST search: invoke `ast_grep` to find functions, decorators, or calls without fragile text regex.
    - For locating files across workspace: invoke `find_files` with glob patterns instead of traversing with `list_directory`.
+   - For creating folders: invoke `create_folder`. Fast native directory creation.
+   - For creating or writing files: invoke `write_file`. Fast native file write.
+     CRITICAL: NEVER use PowerShell echo/Out-File/terminal commands to create files or folders! Write pure raw text/code without PowerShell backtick escaping.
+   - For Git push, CI/CD, Netlify, or Vercel deployment: ALWAYS invoke `analyze_deployment` first to audit git remotes, verify .gitignore prevents .env leaks, and validate build scripts.
    - For project initialization & servers: invoke `inspect_project_environment` to inspect dependencies. If missing, install them. For dev servers (e.g. `npm run dev`), check ports with `port_manager`, invoke `launch_background_process`, verify with `http_probe`, then call `open_browser`.
    - For scaffolding new stacks (React TypeScript, Next.js, FastAPI, Node): invoke `scaffold_project`.
    - For reading documents (.pdf, .docx, .csv): invoke `read_document`.
@@ -94,11 +98,15 @@ class AgentOrchestrator:
         provider: NvidiaNimProvider | None = None,
         tool_registry: ToolRegistry | None = None,
         memory_repo: MemoryRepository | None = None,
+        conv_repo: ConversationRepository | None = None,
+        task_repo: TaskRepository | None = None,
         verifier: OutcomeVerifier | None = None,
     ) -> None:
         self.provider = provider or NvidiaNimProvider()
         self.tools = tool_registry or ToolRegistry()
         self.memory = memory_repo or MemoryRepository()
+        self.conv_repo = conv_repo or ConversationRepository()
+        self.task_repo = task_repo or TaskRepository()
         self.verifier = verifier
 
     async def run(
@@ -106,6 +114,7 @@ class AgentOrchestrator:
         objective: str,
         working_directory: Path | str | None = None,
         project_id: str | None = None,
+        conversation_id: str | None = None,
         max_iterations: int = 12,
     ) -> AgentState:
         """Execute autonomous loop until goal is reached with verification gate and reflection."""
@@ -114,8 +123,24 @@ class AgentOrchestrator:
             objective=objective,
             working_directory=cwd,
             project_id=project_id,
+            conversation_id=conversation_id,
             max_iterations=max_iterations,
         )
+
+        # Establish or retrieve persistent conversation session
+        if conversation_id:
+            conv = await self.conv_repo.get_conversation(conversation_id)
+            if conv:
+                state.conversation_id = conv.id
+            else:
+                conv = await self.conv_repo.create_conversation(title=objective[:60], project_id=project_id)
+                state.conversation_id = conv.id
+        else:
+            conv = await self.conv_repo.create_conversation(title=objective[:60], project_id=project_id)
+            state.conversation_id = conv.id
+
+        # Record user message in DB
+        await self.conv_repo.add_message(state.conversation_id, "user", objective)
 
         verifier = self.verifier or OutcomeVerifier(workspace_root=cwd)
 
@@ -142,8 +167,16 @@ class AgentOrchestrator:
 
         messages = [
             ChatMessage(role="system", content=system_msg),
-            ChatMessage(role="user", content=f"Execute task: {objective}"),
         ]
+
+        # Inject previous conversation messages for conversational continuity if resuming
+        if conversation_id:
+            prior_msgs = await self.conv_repo.get_messages(state.conversation_id, limit=20)
+            # Exclude the current message we just added
+            for pm in prior_msgs[:-1]:
+                messages.append(ChatMessage(role=pm.role, content=pm.content))
+
+        messages.append(ChatMessage(role="user", content=f"Execute task: {objective}"))
 
         while state.iteration < state.max_iterations and not state.completed:
             state.iteration += 1
@@ -178,9 +211,9 @@ class AgentOrchestrator:
                         verification_passed = False
                         verification_errors.append(v_res.details)
 
-                # 2. If files were modified, verify project test suite passes
+                # 2. If files were modified, verify project test suite passes (skips for non-code files)
                 if state.modified_files and verification_passed:
-                    t_res = await verifier.verify_test_suite_passes()
+                    t_res = await verifier.verify_test_suite_passes(modified_files=state.modified_files)
                     state.verification_results.append(t_res.model_dump())
                     if not t_res.verified:
                         verification_passed = False
@@ -300,6 +333,14 @@ class AgentOrchestrator:
             )
         except Exception:
             pass
+
+        # Record assistant answer in conversation history and audit task
+        if state.final_answer and state.conversation_id:
+            try:
+                await self.conv_repo.add_message(state.conversation_id, "assistant", state.final_answer)
+                await self.task_repo.record_task(objective=objective, thread_id=state.conversation_id, status="completed")
+            except Exception:
+                pass
 
         return state
 

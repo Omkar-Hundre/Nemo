@@ -11,6 +11,8 @@ import pytest
 
 # 3. Local / internal imports
 from nemo.tools.builtin import (
+    CreateFolderTool,
+    DeployAnalysisTool,
     DocumentGeneratorTool,
     DocumentReaderTool,
     EnvConfigInspectorTool,
@@ -19,6 +21,7 @@ from nemo.tools.builtin import (
     PortManagerTool,
     PresentationGeneratorTool,
     ScaffoldProjectTool,
+    WriteFileTool,
 )
 
 # 4. Types, Protocols, Schemas
@@ -234,6 +237,82 @@ async def test_scaffold_project_fastapi():
         assert res.data["dev_command"] == "uvicorn main:app --reload --port 8000"
 
 
+@pytest.mark.asyncio
+async def test_create_folder_and_sanitized_write_file():
+    """Verify CreateFolderTool creates directories and WriteFileTool strips PowerShell backticks."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        folder_tool = CreateFolderTool()
+        write_tool = WriteFileTool()
+
+        # 1. Create nested directory
+        res_dir = await folder_tool.execute({"path": "downloads/omkarisgreat"}, {"working_directory": str(root)})
+        assert res_dir.success
+        target_dir = root / "downloads" / "omkarisgreat"
+        assert target_dir.is_dir()
+
+        # 2. Write file containing accidental PowerShell escape sequences (`n and `")
+        ps_escaped_html = "<!DOCTYPE html>`n<html lang=`\"en`\">`n<head>`n<title>Hello</title>`n</head>`n<body>`n<h1>Hello Omkar</h1>`n</body>`n</html>"
+        res_file = await write_tool.execute(
+            {"path": "downloads/omkarisgreat/test.html", "content": ps_escaped_html},
+            {"working_directory": str(root)},
+        )
+        assert res_file.success
+        html_file = target_dir / "test.html"
+        assert html_file.exists()
+        cleaned_content = html_file.read_text(encoding="utf-8")
+
+        # Verify no backticks remain; standard HTML tags and newlines are preserved
+        assert "`n" not in cleaned_content
+        assert '`"' not in cleaned_content
+        assert '<html lang="en">' in cleaned_content
+        assert "\n" in cleaned_content
+        assert "<h1>Hello Omkar</h1>" in cleaned_content
+
+
+@pytest.mark.asyncio
+async def test_deploy_analysis_tool_secret_leak_and_platform_detection():
+    """Verify DeployAnalysisTool flags unignored .env files as critical blockers."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        deploy_tool = DeployAnalysisTool()
+
+        # Scenario A: .env exists without .gitignore -> blocker
+        (root / ".env").write_text("DATABASE_URL=postgres://user:pass@localhost/db")
+        res_blocked = await deploy_tool.execute({"path": "."}, {"working_directory": str(root)})
+        assert res_blocked.success
+        assert res_blocked.data["safe_to_push"] is False
+        assert any("Secret file '.env' exists but is NOT covered in .gitignore" in b for b in res_blocked.data["blockers"])
+
+        # Scenario B: Add .gitignore and package.json with build script
+        (root / ".gitignore").write_text(".env\nnode_modules\ndist\n")
+        (root / "package.json").write_text('{"name": "my-app", "scripts": {"build": "vite build"}}')
+        (root / "dist").mkdir()
+        (root / "dist" / "index.html").write_text("<h1>App</h1>")
+
+        res_ready = await deploy_tool.execute({"path": "."}, {"working_directory": str(root)})
+        assert res_ready.success
+        # Blockers resolved
+        assert len(res_ready.data["blockers"]) == 0
+        assert res_ready.data["safe_to_deploy"] is True
+        assert "dist" in res_ready.data["details"]["detected_publish_dirs"]
+        assert any("netlify" in rec.lower() for rec in res_ready.data["recommendations"])
+
+
+@pytest.mark.asyncio
+async def test_outcome_verifier_skips_test_runner_for_content():
+    """Verify OutcomeVerifier skips lengthy test suites for non-code files."""
+    from nemo.agent.verifier import OutcomeVerifier
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        verifier = OutcomeVerifier(workspace_root=root)
+
+        # Modifying only HTML/markdown should bypass test runner
+        res = await verifier.verify_test_suite_passes(modified_files=["index.html", "README.md"])
+        assert res.verified
+        assert "skipped test runner" in res.details
+
+
 # 6. Public exports
 __all__ = [
     "test_find_files_recursive_with_exclusions",
@@ -243,4 +322,7 @@ __all__ = [
     "test_document_generator_and_reader_docx_and_csv",
     "test_presentation_generator_standalone_html",
     "test_scaffold_project_fastapi",
+    "test_create_folder_and_sanitized_write_file",
+    "test_deploy_analysis_tool_secret_leak_and_platform_detection",
+    "test_outcome_verifier_skips_test_runner_for_content",
 ]

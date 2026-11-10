@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 class AgentState(BaseModel):
     """Runtime execution state for autonomous agent tasks."""
     task_id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
+    conversation_id: str | None = None
     objective: str
     working_directory: str = Field(default_factory=lambda: str(Path.cwd()))
     project_id: str | None = None

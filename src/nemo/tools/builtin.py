@@ -5,7 +5,10 @@ import ast
 import asyncio
 import csv
 import json
+import os
 from pathlib import Path
+import re
+import shutil
 import socket
 import subprocess
 import time
@@ -292,10 +295,52 @@ class ReadFileTool(BaseTool):
             return ToolResult(success=False, error=f"Read error: {exc}")
 
 
+class CreateFolderTool(BaseTool):
+    """Creates a directory or folder tree safely within workspace or user boundaries."""
+    name = "create_folder"
+    description = "Create a directory or folder hierarchy (e.g. in workspace, Downloads, Desktop). Fast native directory creation."
+    risk_level = RiskLevel.L1
+
+    def __init__(self, policy: SecurityPolicy | None = None) -> None:
+        self.policy = policy or SecurityPolicy()
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Folder path to create (relative or absolute)."},
+                },
+                "required": ["path"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        raw_path = arguments.get("path", "")
+        if not raw_path:
+            return ToolResult(success=False, error="Path is required.")
+
+        p_str = str(raw_path).replace("$env:USERPROFILE", str(Path.home())).replace("~", str(Path.home()))
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        target = (base_dir / p_str).resolve() if not Path(p_str).is_absolute() else Path(p_str).resolve()
+
+        if not self.policy.is_path_safe(target, base_dir=base_dir):
+            return ToolResult(success=False, error=f"Access denied: path outside allowed boundary ({target})")
+
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            return ToolResult(success=True, data={"path": str(target), "created": True, "is_directory": target.is_dir()})
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Folder creation error: {exc}")
+
+
 class WriteFileTool(BaseTool):
     """Writes text content to a file safely within workspace boundaries."""
     name = "write_file"
-    description = "Write or overwrite file content in the workspace."
+    description = "Write or overwrite file content in the workspace. Native Python file write without PowerShell escaping."
     risk_level = RiskLevel.L2
 
     def __init__(self, policy: SecurityPolicy | None = None) -> None:
@@ -309,7 +354,7 @@ class WriteFileTool(BaseTool):
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Target file path."},
-                    "content": {"type": "string", "description": "Full file content to write."},
+                    "content": {"type": "string", "description": "Full file content to write. Clean raw code or text without PowerShell escaping."},
                 },
                 "required": ["path", "content"],
             },
@@ -319,12 +364,20 @@ class WriteFileTool(BaseTool):
     async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
         rel_path = arguments.get("path", "")
         content = arguments.get("content", "")
+        if not rel_path:
+            return ToolResult(success=False, error="Path is required.")
+
+        p_str = str(rel_path).replace("$env:USERPROFILE", str(Path.home())).replace("~", str(Path.home()))
         base_dir = Path(context.get("working_directory", Path.cwd()))
-        target = (base_dir / rel_path).resolve() if not Path(rel_path).is_absolute() else Path(rel_path).resolve()
+        target = (base_dir / p_str).resolve() if not Path(p_str).is_absolute() else Path(p_str).resolve()
 
         # Enforce workspace security boundary
         if not self.policy.is_path_safe(target, base_dir=base_dir):
             return ToolResult(success=False, error=f"Access denied: path outside workspace ({target})")
+
+        # Sanitize accidental PowerShell backtick escapes (`n -> \n, `" -> ", `t -> \t, `r -> '')
+        if "`n" in content or '`"' in content:
+            content = content.replace("`r`n", "\n").replace("`n", "\n").replace('`"', '"').replace("`t", "\t").replace("`r", "")
 
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -1734,6 +1787,178 @@ showSlide(0);
             },
         )
 
+
+class DeployAnalysisTool(BaseTool):
+    """Analyzes codebase, git status, secrets, CI/CD, and deployment readiness for GitHub, Netlify, or Vercel."""
+    name = "analyze_deployment"
+    description = (
+        "Inspect repository safety before git push, CI/CD run, or Netlify/Vercel deployment. "
+        "Audits git branch/remotes, checks for secret leaks (.env not ignored), validates build scripts, "
+        "and detects publish directory readiness."
+    )
+    risk_level = RiskLevel.L0
+
+    def __init__(self) -> None:
+        self.executor = NativeSubprocessExecutor()
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Project workspace path (default '.')."},
+                    "target_platform": {
+                        "type": "string",
+                        "description": "Optional deployment platform filter: 'all', 'netlify', 'vercel', or 'github'.",
+                        "default": "all",
+                    },
+                },
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        target_path = (base_dir / arguments.get("path", ".")).resolve()
+        platform = arguments.get("target_platform", "all").lower()
+
+        if not target_path.exists():
+            return ToolResult(success=False, error=f"Target path does not exist: {target_path}")
+
+        blockers: list[str] = []
+        warnings: list[str] = []
+        recommendations: list[str] = []
+        info: dict[str, Any] = {}
+
+        # 1. Git Repository and Branch Inspection
+        is_git_repo = (target_path / ".git").exists()
+        info["is_git_repo"] = is_git_repo
+
+        if is_git_repo:
+            branch_res = await self.executor.execute("git branch --show-current", cwd=target_path)
+            current_branch = branch_res.stdout.strip() if branch_res.is_success else "unknown"
+            info["current_branch"] = current_branch
+
+            remote_res = await self.executor.execute("git remote -v", cwd=target_path)
+            info["remotes"] = remote_res.stdout.strip().splitlines() if remote_res.is_success else []
+
+            status_res = await self.executor.execute("git status --porcelain", cwd=target_path)
+            dirty_files = [line.strip() for line in status_res.stdout.splitlines() if line.strip()]
+            info["uncommitted_changes_count"] = len(dirty_files)
+            info["uncommitted_files"] = dirty_files[:20]
+
+            if not info["remotes"]:
+                warnings.append("No Git remotes configured. To push to GitHub, add a remote: git remote add origin <url>")
+            if len(dirty_files) > 0:
+                warnings.append(f"There are {len(dirty_files)} uncommitted or untracked changes in the working tree.")
+        else:
+            warnings.append("Directory is not a Git repository. Run 'git init' before uploading to GitHub.")
+
+        # 2. Secret Leak & .gitignore Safety Audit
+        gitignore_path = target_path / ".gitignore"
+        has_gitignore = gitignore_path.exists()
+        info["has_gitignore"] = has_gitignore
+        gitignore_content = gitignore_path.read_text(encoding="utf-8", errors="replace") if has_gitignore else ""
+
+        # Check if .env or secret files exist in workspace
+        env_files = list(target_path.glob(".env*"))
+        for ef in env_files:
+            ef_name = ef.name
+            if not has_gitignore or (ef_name not in gitignore_content and ".env*" not in gitignore_content):
+                blockers.append(f"CRITICAL: Secret file '{ef_name}' exists but is NOT covered in .gitignore! Add '{ef_name}' to .gitignore before pushing.")
+
+        # Check if .env is already tracked in git
+        if is_git_repo:
+            tracked_check = await self.executor.execute("git ls-files .env .env.local", cwd=target_path)
+            if tracked_check.stdout.strip():
+                blockers.append(f"CRITICAL: Secret file(s) are actively tracked in Git: {tracked_check.stdout.strip()}. Run 'git rm --cached <file>' immediately!")
+
+        # Scan staged/modified files for obvious token patterns
+        token_regex = re.compile(r"\b(ghp_[A-Za-z0-9]{36}|nvapi-[A-Za-z0-9_-]{40,}|sk-[A-Za-z0-9]{32,}|AKIA[0-9A-Z]{16})\b")
+        if is_git_repo:
+            diff_res = await self.executor.execute("git diff HEAD", cwd=target_path)
+            if diff_res.is_success and diff_res.stdout:
+                matches = token_regex.findall(diff_res.stdout)
+                if matches:
+                    blockers.append(f"CRITICAL: Hardcoded API secret/token detected in pending git diff! Found {len(matches)} token pattern(s).")
+
+        # 3. Build & CI/CD Readiness Inspection
+        pkg_json_path = target_path / "package.json"
+        pyproject_path = target_path / "pyproject.toml"
+        workflows_dir = target_path / ".github" / "workflows"
+
+        info["has_package_json"] = pkg_json_path.exists()
+        info["has_pyproject"] = pyproject_path.exists()
+        info["github_workflows"] = [f.name for f in workflows_dir.glob("*.y*ml")] if workflows_dir.exists() else []
+
+        build_script_found = False
+        if pkg_json_path.exists():
+            try:
+                pkg_data = json.loads(pkg_json_path.read_text(encoding="utf-8"))
+                scripts = pkg_data.get("scripts", {})
+                info["npm_scripts"] = list(scripts.keys())
+                if "build" in scripts:
+                    build_script_found = True
+                    info["build_command"] = "npm run build"
+            except Exception:
+                pass
+
+        # Detect Publish Directory (dist, build, out, public)
+        publish_dirs = [d.name for d in (target_path / "dist", target_path / "build", target_path / "out", target_path / "public") if d.is_dir()]
+        info["detected_publish_dirs"] = publish_dirs
+
+        # 4. Netlify Platform Analysis
+        netlify_toml = target_path / "netlify.toml"
+        info["has_netlify_toml"] = netlify_toml.exists()
+        netlify_cli_installed = shutil.which("netlify") is not None
+        info["netlify_cli_installed"] = netlify_cli_installed
+
+        if platform in ("all", "netlify"):
+            if not netlify_toml.exists():
+                warnings.append("No netlify.toml found. Recommended config: [build] publish = 'dist' command = 'npm run build'")
+            if not publish_dirs and build_script_found:
+                warnings.append("Build publish directory (dist/build) has not been generated yet. Run 'npm run build' before deploying.")
+            if netlify_cli_installed:
+                recommendations.append("Netlify CLI ready: deploy preview with 'netlify deploy', or production with 'netlify deploy --prod --dir=dist'")
+            else:
+                recommendations.append("Deploy using npx: 'npx netlify deploy --prod' or install CLI with 'npm install -g netlify-cli'")
+
+        # 5. Vercel Platform Analysis
+        vercel_json = target_path / "vercel.json"
+        info["has_vercel_json"] = vercel_json.exists()
+        vercel_cli_installed = shutil.which("vercel") is not None
+        info["vercel_cli_installed"] = vercel_cli_installed
+
+        if platform in ("all", "vercel"):
+            if vercel_cli_installed:
+                recommendations.append("Vercel CLI ready: deploy preview with 'vercel', or production with 'vercel --prod'")
+            else:
+                recommendations.append("Deploy using npx: 'npx vercel --prod'")
+
+        # 6. GitHub CI/CD Analysis
+        if platform in ("all", "github"):
+            if info["github_workflows"]:
+                recommendations.append(f"GitHub Actions CI/CD workflows detected: {', '.join(info['github_workflows'])}")
+            else:
+                warnings.append("No GitHub Actions workflows found in .github/workflows. Push will upload code without automated remote CI.")
+
+        safe_to_push = len(blockers) == 0 and is_git_repo
+        safe_to_deploy = len(blockers) == 0
+
+        return ToolResult(
+            success=True,
+            data={
+                "safe_to_push": safe_to_push,
+                "safe_to_deploy": safe_to_deploy,
+                "blockers": blockers,
+                "warnings": warnings,
+                "recommendations": recommendations,
+                "details": info,
+            },
+        )
+
 # 6. Public exports
 __all__ = [
     "CodebaseSummaryTool",
@@ -1742,6 +1967,7 @@ __all__ = [
     "SemanticSearchTool",
     "TerminalTool",
     "ReadFileTool",
+    "CreateFolderTool",
     "WriteFileTool",
     "ListDirectoryTool",
     "MemoryRecallTool",
@@ -1761,4 +1987,5 @@ __all__ = [
     "DocumentReaderTool",
     "DocumentGeneratorTool",
     "PresentationGeneratorTool",
+    "DeployAnalysisTool",
 ]

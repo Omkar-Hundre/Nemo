@@ -6,10 +6,18 @@ from pathlib import Path
 # 2. Third-party imports
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 # 3. Local / internal imports
 from nemo.database.connection import get_db_session, init_db
-from nemo.database.models import MemoryItem, Project
+from nemo.database.models import (
+    AgentCheckpoint,
+    AgentTask,
+    Conversation,
+    ConversationMessage,
+    MemoryItem,
+    Project,
+)
 
 # 4. Types, Protocols, Schemas
 COMMON_STOPWORDS = {
@@ -256,6 +264,141 @@ class ProjectRepository:
             await session.commit()
             return True
 
+
+class ConversationRepository:
+    """Persistence and retrieval of conversations and multi-turn messages."""
+
+    def __init__(self, session_provider=get_db_session) -> None:
+        self.session_provider = session_provider
+
+    async def create_conversation(
+        self,
+        title: str = "Untitled Session",
+        project_id: str | None = None,
+    ) -> Conversation:
+        """Create a new tracked conversation session."""
+        conv = Conversation(title=title[:250], project_id=project_id)
+        async with self.session_provider() as session:
+            session.add(conv)
+            await session.commit()
+            await session.refresh(conv)
+            return conv
+
+    async def get_conversation(self, conversation_id: str) -> Conversation | None:
+        """Retrieve conversation by ID with eager-loaded messages."""
+        async with self.session_provider() as session:
+            stmt = (
+                select(Conversation)
+                .options(selectinload(Conversation.messages))
+                .where(Conversation.id == conversation_id)
+            )
+            res = await session.execute(stmt)
+            return res.scalar_one_or_none()
+
+    async def list_conversations(
+        self,
+        project_id: str | None = None,
+        limit: int = 25,
+    ) -> list[Conversation]:
+        """List recent conversation sessions."""
+        async with self.session_provider() as session:
+            stmt = (
+                select(Conversation)
+                .options(selectinload(Conversation.messages))
+            )
+            if project_id:
+                stmt = stmt.where(Conversation.project_id == project_id)
+            stmt = stmt.order_by(Conversation.created_at.desc()).limit(limit)
+            res = await session.execute(stmt)
+            return list(res.scalars().all())
+
+    async def add_message(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str,
+    ) -> ConversationMessage:
+        """Record a chat message within the conversation."""
+        msg = ConversationMessage(
+            conversation_id=conversation_id,
+            role=role,
+            content=content,
+        )
+        async with self.session_provider() as session:
+            session.add(msg)
+            await session.commit()
+            await session.refresh(msg)
+            return msg
+
+    async def get_messages(
+        self,
+        conversation_id: str,
+        limit: int = 100,
+    ) -> list[ConversationMessage]:
+        """Retrieve ordered history of messages for a conversation."""
+        async with self.session_provider() as session:
+            stmt = (
+                select(ConversationMessage)
+                .where(ConversationMessage.conversation_id == conversation_id)
+                .order_by(ConversationMessage.created_at.asc())
+                .limit(limit)
+            )
+            res = await session.execute(stmt)
+            return list(res.scalars().all())
+
+    async def update_title(self, conversation_id: str, title: str) -> bool:
+        """Update conversation title."""
+        async with self.session_provider() as session:
+            stmt = select(Conversation).where(Conversation.id == conversation_id)
+            res = await session.execute(stmt)
+            conv = res.scalar_one_or_none()
+            if not conv:
+                return False
+            conv.title = title[:250]
+            await session.commit()
+            return True
+
+    async def delete_conversation(self, conversation_id: str) -> bool:
+        """Delete a conversation and cascade all its messages."""
+        async with self.session_provider() as session:
+            stmt = select(Conversation).where(Conversation.id == conversation_id)
+            res = await session.execute(stmt)
+            conv = res.scalar_one_or_none()
+            if not conv:
+                return False
+            await session.delete(conv)
+            await session.commit()
+            return True
+
+
+class TaskRepository:
+    """Audit and tracking of background/autonomous agent task executions."""
+
+    def __init__(self, session_provider=get_db_session) -> None:
+        self.session_provider = session_provider
+
+    async def record_task(
+        self,
+        objective: str,
+        thread_id: str = "default",
+        status: str = "completed",
+    ) -> AgentTask:
+        """Record an agent task execution."""
+        task = AgentTask(objective=objective, thread_id=thread_id, status=status)
+        async with self.session_provider() as session:
+            session.add(task)
+            await session.commit()
+            await session.refresh(task)
+            return task
+
+    async def list_tasks(self, limit: int = 25) -> list[AgentTask]:
+        """List recent agent tasks."""
+        async with self.session_provider() as session:
+            stmt = select(AgentTask).order_by(AgentTask.created_at.desc()).limit(limit)
+            res = await session.execute(stmt)
+            return list(res.scalars().all())
+
+
 # 6. Public exports
-__all__ = ["MemoryRepository", "ProjectRepository"]
+__all__ = ["MemoryRepository", "ProjectRepository", "ConversationRepository", "TaskRepository"]
 

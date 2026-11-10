@@ -9,6 +9,7 @@ import sys
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.table import Table
 
 # 3. Local / internal imports
 from nemo import __version__
@@ -19,11 +20,11 @@ from nemo.config.settings import get_settings
 from nemo.database.connection import init_db
 from nemo.execution.shells.native import NativeSubprocessExecutor
 from nemo.intelligence.indexer import ProjectIndexer
-from nemo.memory.repository import MemoryRepository, ProjectRepository
+from nemo.memory.repository import ConversationRepository, MemoryRepository, ProjectRepository
 
 # 4. Types, Protocols, Schemas
 KNOWN_NATIVE_PREFIXES = (
-    "git", "dir", "ls", "cd", "python", "py", "node", "npm",
+    "git", "gh", "netlify", "ntl", "vercel", "dir", "ls", "cd", "python", "py", "node", "npm",
     "pnpm", "yarn", "uv", "pip", "pytest", "cargo", "docker",
     "cat", "type", "cls", "clear", "echo", "whoami", "get-childitem",
     "get-content", "get-date", "set-location",
@@ -50,7 +51,7 @@ def is_action_intent(text: str) -> bool:
     return any(t.startswith(prefix) for prefix in ACTION_INTENT_PREFIXES)
 
 
-async def run_interactive_chat() -> None:
+async def run_interactive_chat(initial_conversation_id: str | None = None) -> None:
     """Launch persistent interactive developer operating session."""
     await init_db()
     settings = get_settings()
@@ -65,6 +66,9 @@ async def run_interactive_chat() -> None:
     indexer = ProjectIndexer(curr_dir)
     indexed_files = len(indexer.get_indexed_files())
 
+    conv_repo = ConversationRepository()
+    active_conversation_id = initial_conversation_id
+
     # Render Welcome Banner
     banner = (
         f"[bold cyan]NEMO ASSISTANT[/bold cyan] [green]● Connected[/green]\n\n"
@@ -72,9 +76,18 @@ async def run_interactive_chat() -> None:
         f"[bold]IDE Adapter:[/bold]     {settings.default_ide}\n"
         f"[bold]Memory System:[/bold]   Synchronized\n"
         f"[bold]Code Index:[/bold]      {indexed_files} files up to date\n\n"
-        f"[dim]Type natural language requests or native terminal commands. 'exit' to quit.[/dim]"
+        f"[dim]Commands: 'history' (view previous tasks), 'resume <id>' (restore context), 'new' (fresh session), 'exit' to quit.[/dim]"
     )
     console.print(Panel(banner, title=f"[bold]NEMO v{__version__} — Developer Runtime[/bold]", border_style="cyan"))
+
+    if active_conversation_id:
+        conv = await conv_repo.get_conversation(active_conversation_id)
+        if conv:
+            console.print(f"[bold green]Resumed Session {conv.id[:8]}:[/bold green] [cyan]{conv.title}[/cyan]")
+            recent_msgs = await conv_repo.get_messages(conv.id, limit=4)
+            for m in recent_msgs:
+                console.print(f" [dim]{m.role.capitalize()}: {m.content[:75]}...[/dim]")
+            console.print()
 
     executor = NativeSubprocessExecutor(default_shell=settings.default_shell)
     provider = NvidiaNimProvider()
@@ -94,10 +107,11 @@ async def run_interactive_chat() -> None:
 
     while True:
         try:
+            prompt_label = f"nemo [{active_conversation_id[:6]}]> " if active_conversation_id else "nemo> "
             if prompt_session is not None and sys.stdin.isatty():
-                user_input = (await prompt_session.prompt_async("nemo> ")).strip()
+                user_input = (await prompt_session.prompt_async(prompt_label)).strip()
             else:
-                user_input = console.input("[bold cyan]nemo>[/bold cyan] ").strip()
+                user_input = console.input(f"[bold cyan]{prompt_label}[/bold cyan]").strip()
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Session closed.[/dim]")
             break
@@ -108,6 +122,52 @@ async def run_interactive_chat() -> None:
         if user_input.lower() in ("exit", "quit", "q"):
             console.print("[dim]Goodbye.[/dim]")
             break
+
+        # Session history inspection
+        if user_input.lower() in ("history", "sessions", "tasks"):
+            convs = await conv_repo.list_conversations(limit=15)
+            if not convs:
+                console.print("[dim]No prior conversation sessions found in database.[/dim]")
+            else:
+                tbl = Table(title="Conversation & Task History", border_style="cyan")
+                tbl.add_column("Session ID", style="bold cyan", width=12)
+                tbl.add_column("Status", width=10)
+                tbl.add_column("Title / Objective", style="white")
+                tbl.add_column("Started", style="dim", width=18)
+                tbl.add_column("Messages", justify="right", width=10)
+                for c in convs:
+                    is_active = "[green]● ACTIVE[/green]" if c.id == active_conversation_id else "[dim]○[/dim]"
+                    started = c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "-"
+                    msg_count = str(len(c.messages)) if c.messages else "0"
+                    tbl.add_row(c.id[:8], is_active, c.title, started, msg_count)
+                console.print(tbl)
+                console.print("[dim]Use 'resume <id>' to switch context, or 'new' for a fresh session.[/dim]\n")
+            continue
+
+        # Resume specific conversation session
+        if user_input.lower().startswith("resume "):
+            target_id = user_input[7:].strip()
+            all_convs = await conv_repo.list_conversations(limit=50)
+            matched = [c for c in all_convs if c.id.startswith(target_id)]
+            if matched:
+                selected = matched[0]
+                active_conversation_id = selected.id
+                console.print(f"[bold green]Resumed Session {selected.id[:8]}:[/bold green] [cyan]{selected.title}[/cyan]")
+                msgs = await conv_repo.get_messages(selected.id, limit=4)
+                if msgs:
+                    console.print("[dim]Recent messages in this session:[/dim]")
+                    for m in msgs:
+                        console.print(f" [dim]{m.role.capitalize()}: {m.content[:75]}...[/dim]")
+                console.print()
+            else:
+                console.print(f"[red]No conversation found matching '{target_id}'[/red]")
+            continue
+
+        # Start fresh new session
+        if user_input.lower() in ("new", "new session", "reset session"):
+            active_conversation_id = None
+            console.print("[cyan]Started fresh conversation session with clean context.[/cyan]\n")
+            continue
 
         # Fast deterministic native command passthrough
         if is_native_command(user_input):
@@ -130,9 +190,17 @@ async def run_interactive_chat() -> None:
         # Strip optional "task " prefix if user typed it
         target_goal = user_input[5:].strip() if user_input.lower().startswith("task ") else user_input
 
-        # Execute all natural language requests with full tool capabilities & context continuity
+        # Execute all natural language requests with full tool capabilities, context continuity & session history
         with console.status("[bold green]Deliberating, executing, and verifying..."):
-            state = await orchestrator.run(objective=target_goal, working_directory=curr_dir)
+            state = await orchestrator.run(
+                objective=target_goal,
+                working_directory=curr_dir,
+                conversation_id=active_conversation_id,
+            )
+
+        # Maintain active conversation ID across subsequent turns
+        if state.conversation_id:
+            active_conversation_id = state.conversation_id
 
         if state.tool_history:
             console.print("\n[bold]Execution Steps:[/bold]")
