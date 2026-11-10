@@ -8,6 +8,7 @@ import sys
 
 # 2. Third-party imports
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 import typer
@@ -24,7 +25,12 @@ from nemo.cli.setup import run_setup_wizard
 from nemo.config.settings import get_settings
 from nemo.daemon.client import DaemonClient
 from nemo.daemon.server import app as daemon_fastapi_app
-from nemo.database.connection import init_db, resolve_database_url
+from nemo.database.connection import (
+    backup_database,
+    init_db,
+    resolve_database_url,
+    restore_database,
+)
 from nemo.execution.sessions.manager import SessionManager
 from nemo.execution.shells.native import NativeSubprocessExecutor
 from nemo.intelligence.indexer import ProjectIndexer
@@ -307,6 +313,26 @@ def memory_init() -> None:
     console.print("[bold green]Database schema initialized successfully.[/bold green]")
 
 
+@memory_app.command("status")
+def memory_status() -> None:
+    """Display memory storage metrics and health."""
+    async def _status():
+        await init_db()
+        items = await memory_repo.list_memories(limit=1000)
+        db_url = resolve_database_url()
+        global_count = sum(1 for m in items if m.scope == "global")
+        project_count = sum(1 for m in items if m.scope == "project")
+        console.print(Panel(
+            f"[bold]Database URL:[/bold] {db_url}\n"
+            f"[bold]Active Memories:[/bold] {len(items)}\n"
+            f"[bold]Global Memories:[/bold] {global_count}\n"
+            f"[bold]Project Memories:[/bold] {project_count}",
+            title="[bold cyan]NEMO Memory Storage Status[/bold cyan]",
+            border_style="cyan",
+        ))
+    asyncio.run(_status())
+
+
 @memory_app.command("list")
 def memory_list(
     limit: int = typer.Option(20, "--limit", "-n", help="Maximum memories to list."),
@@ -351,6 +377,127 @@ def memory_search(
         table.add_row(m.id[:8], m.type, m.content)
 
     console.print(table)
+
+
+@memory_app.command("inspect")
+def memory_inspect(
+    memory_id: str = typer.Argument(..., help="Memory ID to inspect."),
+) -> None:
+    """Inspect full details of a specific memory record."""
+    async def _inspect():
+        await init_db()
+        item = await memory_repo.get_memory(memory_id)
+        if not item:
+            items = await memory_repo.list_memories(limit=500)
+            matches = [m for m in items if m.id.startswith(memory_id)]
+            item = matches[0] if matches else None
+        if not item:
+            console.print(f"[bold red]Memory record '{memory_id}' not found.[/bold red]")
+            sys.exit(1)
+
+        console.print(Panel(
+            f"[bold]ID:[/bold] {item.id}\n"
+            f"[bold]Type:[/bold] {item.type}\n"
+            f"[bold]Scope:[/bold] {item.scope}\n"
+            f"[bold]Status:[/bold] {item.status}\n"
+            f"[bold]Importance:[/bold] {item.importance}\n"
+            f"[bold]Confidence:[/bold] {item.confidence}\n"
+            f"[bold]Project ID:[/bold] {item.project_id or 'None'}\n"
+            f"[bold]Subject:[/bold] {item.subject or '-'}\n"
+            f"[bold]Created At:[/bold] {item.created_at}\n"
+            f"[bold]Metadata:[/bold] {item.metadata_}\n\n"
+            f"[bold]Content:[/bold]\n{item.content}",
+            title=f"[bold cyan]Memory Record ({item.id[:8]})[/bold cyan]",
+            border_style="cyan",
+        ))
+    asyncio.run(_inspect())
+
+
+@memory_app.command("forget")
+def memory_forget(
+    memory_id: str = typer.Argument(..., help="Memory ID to forget/archive."),
+) -> None:
+    """Archive a memory record so it is no longer retrieved."""
+    async def _forget():
+        await init_db()
+        target_id = memory_id
+        item = await memory_repo.get_memory(memory_id)
+        if not item:
+            items = await memory_repo.list_memories(limit=500)
+            matches = [m for m in items if m.id.startswith(memory_id)]
+            if matches:
+                target_id = matches[0].id
+        deleted = await memory_repo.delete_memory(target_id)
+        if deleted:
+            console.print(f"[green]Memory [bold]{target_id[:8]}[/bold] archived successfully.[/green]")
+        else:
+            console.print(f"[bold red]Memory record '{memory_id}' not found.[/bold red]")
+            sys.exit(1)
+    asyncio.run(_forget())
+
+
+@memory_app.command("backup")
+def memory_backup(
+    destination: str | None = typer.Option(None, "--dest", "-d", help="Target backup file path."),
+) -> None:
+    """Create atomic backup snapshot of memory and project database."""
+    try:
+        backup_path = backup_database(destination)
+        console.print(f"[bold green]Database successfully backed up to:[/bold green] {backup_path}")
+    except Exception as exc:
+        console.print(f"[bold red]Backup failed: {exc}[/bold red]")
+        sys.exit(1)
+
+
+@memory_app.command("restore")
+def memory_restore(
+    source: str = typer.Argument(..., help="Source database backup file to restore from."),
+) -> None:
+    """Restore memory and project database from a backup file."""
+    try:
+        restored_path = restore_database(source)
+        console.print(f"[bold green]Database successfully restored to:[/bold green] {restored_path}")
+    except Exception as exc:
+        console.print(f"[bold red]Restore failed: {exc}[/bold red]")
+        sys.exit(1)
+
+
+@memory_app.command("export")
+def memory_export(
+    output: str | None = typer.Option(None, "--out", "-o", help="File to write exported JSON memories to."),
+) -> None:
+    """Export all active memories to JSON format."""
+    async def _export():
+        import json
+        await init_db()
+        items = await memory_repo.list_memories(limit=5000)
+        export_data = [
+            {
+                "id": m.id,
+                "scope": m.scope,
+                "project_id": m.project_id,
+                "type": m.type,
+                "subject": m.subject,
+                "predicate": m.predicate,
+                "object": m.object,
+                "content": m.content,
+                "importance": m.importance,
+                "confidence": m.confidence,
+                "status": m.status,
+                "metadata": m.metadata_,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m in items
+        ]
+        payload = json.dumps(export_data, indent=2)
+        if output:
+            p = Path(output).resolve()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(payload, encoding="utf-8")
+            console.print(f"[green]Exported {len(export_data)} memories to {p}[/green]")
+        else:
+            console.print(payload)
+    asyncio.run(_export())
 
 
 @app.command()
@@ -521,7 +668,8 @@ def task(
         parsed = extract_json_block(ans)
         if parsed and parsed.get("action") == "finish" and "answer" in parsed:
             ans = parsed["answer"]
-        console.print(f"\n[bold]Final Outcome:[/bold]\n{ans}")
+        console.print("\n[bold]Final Outcome:[/bold]\n")
+        console.print(Markdown(ans))
 
     asyncio.run(_run_agent())
 

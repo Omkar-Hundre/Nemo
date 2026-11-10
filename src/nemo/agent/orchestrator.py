@@ -66,12 +66,12 @@ def extract_json_block(text: str) -> dict[str, Any] | None:
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     candidate = match.group(1) if match else text.strip()
     try:
-        return json.loads(candidate)
+        return json.loads(candidate, strict=False)
     except Exception:
         match_obj = re.search(r"(\{.*\})", text, re.DOTALL)
         if match_obj:
             try:
-                return json.loads(match_obj.group(1))
+                return json.loads(match_obj.group(1), strict=False)
             except Exception:
                 pass
     return None

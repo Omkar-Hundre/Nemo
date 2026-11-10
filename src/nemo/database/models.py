@@ -126,6 +126,21 @@ class AgentTask(Base):
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
 
+
+class AgentCheckpoint(Base):
+    """Resumable agent task snapshot and checkpoint."""
+    __tablename__ = "agent_checkpoints"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
+    task_id: Mapped[str] = mapped_column(String(36), ForeignKey("agent_tasks.id", ondelete="CASCADE"), index=True)
+    step_number: Mapped[int] = mapped_column(Integer, default=0)
+    state_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+
+    task: Mapped[AgentTask] = relationship("AgentTask", backref="checkpoints")
+
 # 5. Core logic / classes / functions
 # (None)
 
@@ -138,5 +153,6 @@ __all__ = [
     "Conversation",
     "ConversationMessage",
     "AgentTask",
+    "AgentCheckpoint",
 ]
 

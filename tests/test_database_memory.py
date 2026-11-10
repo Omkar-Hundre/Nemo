@@ -4,6 +4,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
+import sqlite3
 import tempfile
 
 # 2. Third-party imports
@@ -12,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # 3. Local / internal imports
+from nemo.database.connection import backup_database, init_db, restore_database
 from nemo.database.models import Base, Conversation, MemoryItem, Project
 from nemo.memory.repository import MemoryRepository, ProjectRepository
 
@@ -296,6 +298,88 @@ async def test_edge_cases_and_sanitization():
         assert len(found_large.content) > 40000
 
 
+@pytest.mark.asyncio
+async def test_database_schema_evolution_and_backup_restore(monkeypatch):
+    """Verify that init_db automatically migrates legacy databases without data loss and tests hot backup/restore."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        legacy_db_file = Path(tmpdir) / "legacy_nemo.db"
+
+        # 1. Manually create an older schema lacking 'metadata' column
+        con = sqlite3.connect(legacy_db_file)
+        con.execute("""
+            CREATE TABLE memory_items (
+                id VARCHAR(36) PRIMARY KEY,
+                scope VARCHAR(50) DEFAULT 'global',
+                project_id VARCHAR(36),
+                type VARCHAR(50) DEFAULT 'fact',
+                subject VARCHAR(200),
+                predicate VARCHAR(100),
+                object VARCHAR(200),
+                content TEXT NOT NULL,
+                importance FLOAT DEFAULT 1.0,
+                confidence FLOAT DEFAULT 1.0,
+                status VARCHAR(50) DEFAULT 'active',
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+        """)
+        con.execute("""
+            INSERT INTO memory_items (id, scope, content, importance, confidence, status)
+            VALUES ('legacy-uuid-1', 'global', 'Legacy memory record without metadata column', 1.0, 1.0, 'active')
+        """)
+        con.commit()
+        con.close()
+
+        # 2. Point engine to legacy db and run init_db
+        test_url = f"sqlite+aiosqlite:///{legacy_db_file.as_posix()}"
+        engine = create_async_engine(test_url, echo=False)
+        await init_db(engine)
+
+        # 3. Verify 'metadata' column was safely added
+        con_check = sqlite3.connect(legacy_db_file)
+        cols = [c[1] for c in con_check.execute("PRAGMA table_info(memory_items)").fetchall()]
+        con_check.close()
+        assert "metadata" in cols, "metadata column must be added by init_db"
+
+        # 4. Verify existing record can be queried via MemoryRepository without error
+        session_factory = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
+
+        @asynccontextmanager
+        async def session_provider():
+            async with session_factory() as sess:
+                yield sess
+                await sess.commit()
+
+        mem_repo = MemoryRepository(session_provider=session_provider)
+        mem = await mem_repo.get_memory("legacy-uuid-1")
+        assert mem is not None
+        assert mem.content == "Legacy memory record without metadata column"
+        assert mem.metadata_ == {}
+
+        await engine.dispose()
+
+        # 5. Test atomic hot backup & restore
+        monkeypatch.setattr("nemo.database.connection.resolve_database_url", lambda: test_url)
+        backup_file = Path(tmpdir) / "backup_archive.db"
+        saved_backup = backup_database(destination=backup_file)
+        assert saved_backup.exists()
+
+        # Modify original database
+        con_modify = sqlite3.connect(legacy_db_file)
+        con_modify.execute("DELETE FROM memory_items")
+        con_modify.commit()
+        con_modify.close()
+
+        # Restore from backup
+        restored_file = restore_database(source=backup_file)
+        assert restored_file == legacy_db_file
+
+        con_restored = sqlite3.connect(legacy_db_file)
+        count = con_restored.execute("SELECT COUNT(*) FROM memory_items").fetchone()[0]
+        con_restored.close()
+        assert count == 1, "Backup restoration must restore all data intact"
+
+
 # 6. Public exports
 __all__ = [
     "create_test_db",
@@ -305,4 +389,5 @@ __all__ = [
     "test_multi_keyword_search_and_importance_ranking",
     "test_concurrent_memory_writes",
     "test_edge_cases_and_sanitization",
+    "test_database_schema_evolution_and_backup_restore",
 ]
