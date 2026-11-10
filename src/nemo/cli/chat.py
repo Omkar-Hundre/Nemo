@@ -7,11 +7,12 @@ import sys
 
 # 2. Third-party imports
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.panel import Panel
 
 # 3. Local / internal imports
 from nemo import __version__
-from nemo.agent.orchestrator import AgentOrchestrator
+from nemo.agent.orchestrator import AgentOrchestrator, extract_json_block
 from nemo.ai.providers.nvidia import NvidiaNimProvider
 from nemo.ai.schemas import ChatMessage
 from nemo.config.settings import get_settings
@@ -80,11 +81,23 @@ async def run_interactive_chat() -> None:
     mem_repo = MemoryRepository()
     orchestrator = AgentOrchestrator()
 
-    history: list[ChatMessage] = []
+    # Configure persistent command history for Up/Down arrow navigation
+    prompt_session = None
+    try:
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.history import FileHistory
+        history_file = Path.home() / ".nemo" / "history.txt"
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        prompt_session = PromptSession(history=FileHistory(str(history_file)))
+    except Exception:
+        prompt_session = None
 
     while True:
         try:
-            user_input = console.input("[bold cyan]nemo>[/bold cyan] ").strip()
+            if prompt_session is not None and sys.stdin.isatty():
+                user_input = (await prompt_session.prompt_async("nemo> ")).strip()
+            else:
+                user_input = console.input("[bold cyan]nemo>[/bold cyan] ").strip()
         except (KeyboardInterrupt, EOFError):
             console.print("\n[dim]Session closed.[/dim]")
             break
@@ -114,46 +127,39 @@ async def run_interactive_chat() -> None:
             console.print(f"[green]Remembered [dim]({item.id[:8]})[/dim]:[/green] {item.content}")
             continue
 
-        # Autonomous operational task trigger (explicit 'task <...>' or detected operational action intent)
-        is_task_cmd = user_input.lower().startswith("task ")
-        if is_task_cmd or is_action_intent(user_input):
-            goal = user_input[5:].strip() if is_task_cmd else user_input
-            console.print(f"[bold cyan]Executing operational action:[/bold cyan] {goal}")
-            with console.status("[bold green]Deliberating and executing..."):
-                state = await orchestrator.run(objective=goal, working_directory=curr_dir)
+        # Strip optional "task " prefix if user typed it
+        target_goal = user_input[5:].strip() if user_input.lower().startswith("task ") else user_input
+
+        # Execute all natural language requests with full tool capabilities & context continuity
+        with console.status("[bold green]Deliberating, executing, and verifying..."):
+            state = await orchestrator.run(objective=target_goal, working_directory=curr_dir)
+
+        if state.tool_history:
+            console.print("\n[bold]Execution Steps:[/bold]")
             for rec in state.tool_history:
                 icon = "[green]✓[/green]" if rec["success"] else "[red]✗[/red]"
                 thought_str = f" | [italic dim]{rec['thought'][:50]}...[/italic dim]" if rec.get("thought") else ""
-                console.print(f" {icon} [cyan]{rec['tool']}[/cyan] [dim]{rec['arguments']}[/dim]{thought_str}")
-            if state.verification_results:
-                for v in state.verification_results:
-                    v_icon = "[green]✓[/green]" if v["verified"] else "[red]✗[/red]"
-                    console.print(f" {v_icon} [{v['ground_truth_source']}] {v['details']}")
-            console.print(f"\n{state.final_answer or 'Completed.'}\n")
-            continue
+                console.print(f" {icon} [bold cyan]{rec['tool']}[/bold cyan] [dim]{rec['arguments']}[/dim]{thought_str}")
 
-        # Conversational reasoning with memory context
-        memories = await mem_repo.search_memories(user_input, project_id=project.id if project else None, limit=5)
-        mem_ctx = ""
-        if memories:
-            mem_ctx = "\nRelevant memories:\n" + "\n".join(f"- {m.content}" for m in memories)
+        if state.verification_results:
+            console.print("\n[bold]Verification Gate Results:[/bold]")
+            for v in state.verification_results:
+                v_icon = "[green]✓[/green]" if v["verified"] else "[red]✗[/red]"
+                console.print(f" {v_icon} [{v['ground_truth_source']}] {v['details']}")
 
-        system_prompt = (
-            "You are NEMO, an expert AI-native developer assistant operating across the developer's Windows environment."
-            + mem_ctx
-        )
-        msgs = [ChatMessage(role="system", content=system_prompt), *history[-6:], ChatMessage(role="user", content=user_input)]
+        if state.extracted_memories:
+            console.print("\n[bold cyan]🧠 Auto-Learned Knowledge Added to Memory:[/bold cyan]")
+            for m in state.extracted_memories:
+                console.print(f" • [green]{m['content']}[/green] [dim]({m['type']})[/dim]")
 
-        full_reply = []
-        try:
-            async for chunk in provider.stream(msgs):
-                console.print(chunk, end="", highlight=False)
-                full_reply.append(chunk)
-            console.print()
-            history.append(ChatMessage(role="user", content=user_input))
-            history.append(ChatMessage(role="assistant", content="".join(full_reply)))
-        except Exception as exc:
-            console.print(f"[bold red]Inference error: {exc}[/bold red]")
+        ans = state.final_answer or "Completed."
+        parsed = extract_json_block(ans)
+        if parsed and parsed.get("action") == "finish" and "answer" in parsed:
+            ans = parsed["answer"]
+
+        console.print("\n[bold]Outcome:[/bold]\n")
+        console.print(Markdown(ans))
+        console.print()
 
 # 6. Public exports
 __all__ = ["run_interactive_chat", "is_native_command", "is_action_intent", "KNOWN_NATIVE_PREFIXES", "ACTION_INTENT_PREFIXES"]

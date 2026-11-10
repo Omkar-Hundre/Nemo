@@ -10,6 +10,7 @@ from typing import Any
 # (None)
 
 # 3. Local / internal imports
+from nemo.agent.context import SessionContextManager
 from nemo.agent.state import AgentState
 from nemo.agent.verifier import OutcomeVerifier
 from nemo.ai.providers.nvidia import NvidiaNimProvider
@@ -26,6 +27,7 @@ Available Tools:
 {tools_schema}
 
 {memory_context}
+{recent_context}
 
 Core Principles & Rules:
 1. DELIBERATION & DEPTH: Before taking any action, clearly define your `thought` (evidence analysis) and `hypothesis` (what this step will verify or achieve).
@@ -44,7 +46,8 @@ Core Principles & Rules:
    - For environment variables & missing secrets: invoke `inspect_env_config`.
    - For inspecting code modifications before declaring completion: invoke `git_diff`.
    - Never traverse folders recursively with `list_directory` when search or summary tools exist.
-5. RESPONSE FORMAT: Output EXACTLY ONE JSON block:
+5. CONVERSATIONAL & PATH CONTINUITY: If the user says 'that folder', 'that file', or references a previous step, resolve the path to the exact target folder/file referenced in Recent Context above, rather than defaulting to the current root.
+6. RESPONSE FORMAT: Output EXACTLY ONE JSON block:
    For taking an action:
    ```json
    {{
@@ -122,6 +125,10 @@ class AgentOrchestrator:
         if memories:
             mem_str = "Long-Term Project Memories:\n" + "\n".join(f"- {m.content}" for m in memories)
 
+        # Context continuity across multi-turn interactions
+        context_mgr = SessionContextManager()
+        recent_context = context_mgr.get_recent_context(objective)
+
         # Format tool definitions
         tool_defs = [t.model_dump() for t in self.tools.get_definitions()]
         tools_str = json.dumps(tool_defs, indent=2)
@@ -130,6 +137,7 @@ class AgentOrchestrator:
             objective=objective,
             tools_schema=tools_str,
             memory_context=mem_str,
+            recent_context=recent_context,
         )
 
         messages = [
@@ -281,6 +289,17 @@ class AgentOrchestrator:
                 ]
             except Exception:
                 pass
+
+        # Persist session context for successive turn continuity
+        try:
+            context_mgr.save_context(
+                objective=objective,
+                outcome=state.final_answer or "",
+                tool_history=state.tool_history,
+                working_directory=cwd,
+            )
+        except Exception:
+            pass
 
         return state
 

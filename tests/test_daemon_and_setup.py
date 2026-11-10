@@ -47,6 +47,11 @@ async def test_daemon_endpoints():
         assert exec_data["exit_code"] == 0
         assert "DAEMON_TEST_OK" in exec_data["stdout"]
 
+        # 5. Shutdown endpoint
+        res_down = await client.post("/v1/shutdown")
+        assert res_down.status_code == 200
+        assert res_down.json()["status"] == "shutting_down"
+
 
 @pytest.mark.asyncio
 async def test_setup_wizard():

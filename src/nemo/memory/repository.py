@@ -12,7 +12,15 @@ from nemo.database.connection import get_db_session, init_db
 from nemo.database.models import MemoryItem, Project
 
 # 4. Types, Protocols, Schemas
-# (None)
+COMMON_STOPWORDS = {
+    "a", "an", "the", "in", "on", "at", "to", "for", "of", "with",
+    "is", "are", "was", "were", "and", "or", "not", "be", "this",
+    "that", "it", "from", "by", "as", "into", "all", "your", "my",
+    "can", "you", "we", "i", "me", "do", "does", "did", "have", "has",
+    "inside", "where", "what", "how", "who", "which", "there", "then",
+    "here", "some", "any", "so", "up", "out", "about",
+}
+
 
 # 5. Core logic / classes / functions
 class MemoryRepository:
@@ -127,8 +135,9 @@ class MemoryRepository:
         project_id: str | None = None,
         limit: int = 10,
     ) -> list[MemoryItem]:
-        """Search active memories by keyword query in content or subject."""
-        tokens = query.lower().split()
+        """Search active memories by significant keyword query in content or subject."""
+        raw_tokens = [t.strip(".,!?:;\"'()[]{}") for t in query.lower().split()]
+        tokens = [t for t in raw_tokens if len(t) >= 3 and t not in COMMON_STOPWORDS]
         if not tokens:
             return []
 

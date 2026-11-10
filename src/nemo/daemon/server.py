@@ -1,6 +1,7 @@
 """FastAPI background daemon server providing local IPC endpoints."""
 
 # 1. Standard library imports
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,15 @@ session_manager = SessionManager()
 async def health_check() -> dict[str, str]:
     """Daemon health and liveness."""
     return {"status": "ok", "version": __version__}
+
+
+@app.post("/v1/shutdown")
+async def shutdown_daemon() -> dict[str, str]:
+    """Gracefully terminate background daemon server."""
+    import os
+    import signal
+    asyncio.get_event_loop().call_later(0.5, lambda: os.kill(os.getpid(), signal.SIGTERM))
+    return {"status": "shutting_down"}
 
 
 @app.get("/v1/status")
