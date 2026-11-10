@@ -36,3 +36,4 @@ class IDEAdapter(Protocol):
 
 # 6. Public exports
 __all__ = ["IDEAdapter"]
+

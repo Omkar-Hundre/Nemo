@@ -80,3 +80,4 @@ class IDERegistry:
 
 # 6. Public exports
 __all__ = ["IDERegistry"]
+

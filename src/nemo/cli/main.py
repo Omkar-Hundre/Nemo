@@ -13,6 +13,7 @@ import typer
 
 # 3. Local / internal imports
 from nemo import __version__
+from nemo.agent.orchestrator import AgentOrchestrator
 from nemo.ai.providers.nvidia import NvidiaNimProvider
 from nemo.ai.schemas import ChatMessage
 from nemo.cli.doctor import run_doctor
@@ -399,6 +400,62 @@ def ide_open_file(
     else:
         console.print(f"[bold red]Failed to open file in IDE.[/bold red]")
         sys.exit(1)
+
+
+# --- Autonomous Agent Commands (Phase 8 & 9) ---
+@app.command()
+def task(
+    objective: str = typer.Argument(..., help="High-level objective for autonomous agent."),
+    max_steps: int = typer.Option(8, "--max-steps", "-m", help="Maximum execution steps."),
+) -> None:
+    """Run autonomous multi-step agent workflow with tool execution and verification."""
+    async def _run_agent():
+        await init_db()
+        orchestrator = AgentOrchestrator()
+        console.print(f"[bold cyan]Starting task:[/bold cyan] {objective}")
+
+        with console.status("[bold green]Planning and executing steps..."):
+            state = await orchestrator.run(objective=objective, max_iterations=max_steps)
+
+        console.print("\n[bold]Execution Steps:[/bold]")
+        for record in state.tool_history:
+            status_icon = "[green]✓[/green]" if record["success"] else "[red]✗[/red]"
+            console.print(f" {status_icon} [bold cyan]{record['tool']}[/bold cyan] [dim]{record['arguments']}[/dim]")
+
+        console.print(f"\n[bold]Final Outcome:[/bold]\n{state.final_answer or 'Completed.'}")
+
+    asyncio.run(_run_agent())
+
+
+@app.command()
+def diagnose(
+    command: str = typer.Argument(..., help="Command that failed or needs troubleshooting."),
+) -> None:
+    """Run command, capture error output, and perform root-cause diagnosis via Nemotron."""
+    async def _diagnose():
+        executor = NativeSubprocessExecutor()
+        console.print(f"[dim]Running command:[/dim] {command}")
+        result = await executor.execute(command)
+
+        if result.is_success:
+            console.print(f"[green]Command succeeded (exit code 0). No error detected.[/green]")
+            if result.stdout:
+                console.print(result.stdout)
+            return
+
+        console.print(f"[red]Command failed with exit code {result.exit_code}[/red]")
+        orchestrator = AgentOrchestrator()
+        with console.status("[bold cyan]Diagnosing root cause..."):
+            analysis = await orchestrator.diagnose_error(
+                failed_command=command,
+                exit_code=result.exit_code,
+                stdout=result.stdout,
+                stderr=result.stderr,
+            )
+
+        console.print(Panel(analysis, title="[bold red]Root Cause Diagnosis[/bold red]", border_style="red"))
+
+    asyncio.run(_diagnose())
 
 
 @app.command()

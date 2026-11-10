@@ -75,3 +75,4 @@ class VSCodeAdapter(IDEAdapter):
 
 # 6. Public exports
 __all__ = ["VSCodeAdapter"]
+

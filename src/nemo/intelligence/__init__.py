@@ -18,3 +18,4 @@ from nemo.intelligence.scanner import ProjectScanner, ScannedFile
 
 # 6. Public exports
 __all__ = ["IndexReport", "ProjectIndexer", "ProjectScanner", "ScannedFile"]
+

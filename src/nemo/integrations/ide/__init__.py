@@ -20,3 +20,4 @@ from nemo.integrations.ide.vscode import VSCodeAdapter
 
 # 6. Public exports
 __all__ = ["IDEAdapter", "AntigravityAdapter", "VSCodeAdapter", "IDERegistry"]
+

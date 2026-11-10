@@ -148,3 +148,4 @@ class ProjectScanner:
 
 # 6. Public exports
 __all__ = ["ScannedFile", "ProjectScanner", "compute_sha256", "DEFAULT_IGNORES", "EXTENSION_LANGUAGE_MAP"]
+
