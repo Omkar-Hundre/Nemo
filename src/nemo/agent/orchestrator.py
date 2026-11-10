@@ -11,13 +11,14 @@ from typing import Any
 
 # 3. Local / internal imports
 from nemo.agent.state import AgentState
+from nemo.agent.verifier import OutcomeVerifier
 from nemo.ai.providers.nvidia import NvidiaNimProvider
 from nemo.ai.schemas import ChatMessage
 from nemo.memory.repository import MemoryRepository
 from nemo.tools.registry import ToolRegistry
 
 # 4. Types, Protocols, Schemas
-SYSTEM_PROMPT_TEMPLATE = """You are NEMO, an autonomous AI-native developer operating assistant on Windows.
+SYSTEM_PROMPT_TEMPLATE = """You are NEMO, an AI-native developer operating assistant on Windows with senior-developer rigor.
 Your objective is: {objective}
 
 Available Tools:
@@ -25,20 +26,34 @@ Available Tools:
 
 {memory_context}
 
-Execution Rules:
-1. ALWAYS use the highest-level tool available:
-   - If asked to explain, analyze, or understand the project, call `get_codebase_summary` FIRST in Step 1.
-   - Do NOT traverse directories folder-by-folder using `list_directory`.
-   - Use `search_code` or `semantic_search` to find symbols and concepts.
-2. When you need to take an action, output EXACTLY ONE JSON block:
-```json
-{{"action": "tool_call", "tool": "<tool_name>", "arguments": {{...}}}}
-```
-3. When you have collected enough information to answer the objective, output:
-```json
-{{"action": "finish", "answer": "<complete, detailed final answer>"}}
-```
-4. Base conclusions strictly on tool execution results. Output pure valid JSON.
+Core Principles & Rules:
+1. DELIBERATION & DEPTH: Before taking any action, clearly define your `thought` (evidence analysis) and `hypothesis` (what this step will verify or achieve).
+2. ROOT CAUSE OVER SYMPTOMS: When diagnosing or fixing issues, do not patch surface errors. Trace the real call flow, inspect definitions, and resolve root causes.
+3. GROUND TRUTH VERIFICATION: Never assume a file exists or syntax is valid without inspection. File writes and code changes undergo strict verification gates before task completion.
+4. TOOL HIERARCHY:
+   - For understanding or summarizing a project: invoke `get_codebase_summary` FIRST.
+   - For finding functions/classes/callers: use `lookup_symbol` or `search_code`.
+   - Never traverse folders recursively with `list_directory` when search or summary tools exist.
+5. RESPONSE FORMAT: Output EXACTLY ONE JSON block:
+   For taking an action:
+   ```json
+   {{
+     "thought": "<reasoning on current facts and observations>",
+     "hypothesis": "<what this action will prove or achieve>",
+     "action": "tool_call",
+     "tool": "<tool_name>",
+     "arguments": {{...}}
+   }}
+   ```
+   For completing the objective:
+   ```json
+   {{
+     "thought": "<synthesis of verified ground-truth evidence>",
+     "action": "finish",
+     "answer": "<complete, detailed final answer>"
+   }}
+   ```
+Output pure valid JSON. No conversational preamble before the JSON block.
 """
 
 # 5. Core logic / classes / functions
@@ -66,10 +81,12 @@ class AgentOrchestrator:
         provider: NvidiaNimProvider | None = None,
         tool_registry: ToolRegistry | None = None,
         memory_repo: MemoryRepository | None = None,
+        verifier: OutcomeVerifier | None = None,
     ) -> None:
         self.provider = provider or NvidiaNimProvider()
         self.tools = tool_registry or ToolRegistry()
         self.memory = memory_repo or MemoryRepository()
+        self.verifier = verifier
 
     async def run(
         self,
@@ -78,7 +95,7 @@ class AgentOrchestrator:
         project_id: str | None = None,
         max_iterations: int = 12,
     ) -> AgentState:
-        """Execute autonomous loop until goal is reached with automatic synthesis on budget limits."""
+        """Execute autonomous loop until goal is reached with verification gate and reflection."""
         cwd = str(Path(working_directory).resolve()) if working_directory else str(Path.cwd())
         state = AgentState(
             objective=objective,
@@ -86,6 +103,8 @@ class AgentOrchestrator:
             project_id=project_id,
             max_iterations=max_iterations,
         )
+
+        verifier = self.verifier or OutcomeVerifier(workspace_root=cwd)
 
         # Retrieve relevant memories
         memories = await self.memory.search_memories(objective, project_id=project_id, limit=5)
@@ -119,8 +138,48 @@ class AgentOrchestrator:
                 state.final_answer = llm_res.content
                 break
 
+            # Capture thought & hypothesis into deliberation history
+            if "thought" in action_data or "hypothesis" in action_data:
+                state.deliberation_history.append({
+                    "iteration": state.iteration,
+                    "thought": action_data.get("thought", ""),
+                    "hypothesis": action_data.get("hypothesis", ""),
+                })
+
             action_type = action_data.get("action")
             if action_type == "finish":
+                # Ground-truth verification gate
+                verification_passed = True
+                verification_errors: list[str] = []
+
+                # 1. Verify all modified or created files
+                for rel_path in state.modified_files:
+                    v_res = await verifier.verify_file_created_or_modified(rel_path)
+                    state.verification_results.append(v_res.model_dump())
+                    if not v_res.verified:
+                        verification_passed = False
+                        verification_errors.append(v_res.details)
+
+                # 2. If files were modified, verify project test suite passes
+                if state.modified_files and verification_passed:
+                    t_res = await verifier.verify_test_suite_passes()
+                    state.verification_results.append(t_res.model_dump())
+                    if not t_res.verified:
+                        verification_passed = False
+                        verification_errors.append(f"Regression in test suite: {t_res.details}")
+
+                if not verification_passed:
+                    # Reject finish and trigger corrective deliberation
+                    messages.append(ChatMessage(role="assistant", content=llm_res.content))
+                    feedback = (
+                        "Verification Gate REJECTED your finish action. Ground-truth checks failed:\n"
+                        + "\n".join(f"- {e}" for e in verification_errors)
+                        + "\nYou must analyze and fix these issues before finishing."
+                    )
+                    messages.append(ChatMessage(role="user", content=feedback))
+                    continue
+
+                state.verified = True
                 state.completed = True
                 state.final_answer = action_data.get("answer", "Task completed.")
                 break
@@ -133,6 +192,12 @@ class AgentOrchestrator:
             if tool_name and self.tools.get_tool(tool_name):
                 tool_args = action_data.get("arguments", {})
 
+                # Track written / modified files
+                if tool_name == "write_file" and "path" in tool_args:
+                    file_path = str(tool_args["path"])
+                    if file_path not in state.modified_files:
+                        state.modified_files.append(file_path)
+
                 # Execute tool
                 tool_result = await self.tools.execute(
                     name=tool_name,
@@ -144,6 +209,8 @@ class AgentOrchestrator:
                     "iteration": state.iteration,
                     "tool": tool_name,
                     "arguments": tool_args,
+                    "thought": action_data.get("thought", ""),
+                    "hypothesis": action_data.get("hypothesis", ""),
                     "success": tool_result.success,
                     "data": tool_result.data,
                     "error": tool_result.error,
@@ -151,11 +218,24 @@ class AgentOrchestrator:
                 state.tool_history.append(step_record)
 
                 messages.append(ChatMessage(role="assistant", content=llm_res.content))
-                obs_content = json.dumps({
-                    "tool": tool_name,
-                    "success": tool_result.success,
-                    "result": tool_result.data if tool_result.success else tool_result.error,
-                })
+
+                # Reflection challenge if tool failed
+                if not tool_result.success:
+                    obs_content = json.dumps({
+                        "tool": tool_name,
+                        "success": False,
+                        "error": tool_result.error,
+                        "reflection_required": (
+                            "Action failed. Provide structured reflection: "
+                            "why did this hypothesis fail, what is the root cause, and what is your alternative strategy?"
+                        ),
+                    })
+                else:
+                    obs_content = json.dumps({
+                        "tool": tool_name,
+                        "success": True,
+                        "result": tool_result.data,
+                    })
                 messages.append(ChatMessage(role="user", content=f"Observation: {obs_content}"))
             else:
                 state.completed = True

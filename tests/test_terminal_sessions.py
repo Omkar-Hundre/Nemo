@@ -7,7 +7,7 @@ import tempfile
 import time
 
 # 2. Third-party imports
-# (None)
+import pytest
 
 # 3. Local / internal imports
 from nemo.execution.sessions.manager import SessionManager
@@ -17,7 +17,8 @@ from nemo.execution.sessions.models import SessionStatus
 # (None)
 
 # 5. Core logic / classes / functions
-async def async_test_session_lifecycle():
+@pytest.mark.asyncio
+async def test_session_lifecycle():
     """Verify session creation, execution, buffer recording, and termination."""
     with tempfile.TemporaryDirectory() as tmpdir:
         state_file = Path(tmpdir) / "sessions.json"
@@ -53,7 +54,7 @@ async def async_test_session_lifecycle():
 
 def main():
     print("Running Phase 3 terminal session verification...")
-    asyncio.run(async_test_session_lifecycle())
+    asyncio.run(test_session_lifecycle())
     print("✓ Phase 3 terminal session lifecycle check passed!")
 
 
@@ -61,4 +62,4 @@ if __name__ == "__main__":
     main()
 
 # 6. Public exports
-__all__ = ["async_test_session_lifecycle"]
+__all__ = ["test_session_lifecycle"]

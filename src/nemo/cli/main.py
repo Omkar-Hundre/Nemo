@@ -16,6 +16,7 @@ import uvicorn
 # 3. Local / internal imports
 from nemo import __version__
 from nemo.agent.orchestrator import AgentOrchestrator, extract_json_block
+from nemo.agent.verifier import OutcomeVerifier
 from nemo.ai.providers.nvidia import NvidiaNimProvider
 from nemo.ai.schemas import ChatMessage
 from nemo.cli.doctor import run_doctor
@@ -27,8 +28,10 @@ from nemo.database.connection import init_db, resolve_database_url
 from nemo.execution.sessions.manager import SessionManager
 from nemo.execution.shells.native import NativeSubprocessExecutor
 from nemo.intelligence.indexer import ProjectIndexer
+from nemo.intelligence.packages import PackageManagerDetector
 from nemo.integrations.ide.registry import IDERegistry
 from nemo.memory.repository import MemoryRepository, ProjectRepository
+from nemo.worker.service import BackgroundWorker
 
 # 4. Types, Protocols, Schemas
 # (None)
@@ -63,6 +66,10 @@ daemon_app = typer.Typer(
     name="daemon",
     help="Manage local background daemon server.",
 )
+worker_app = typer.Typer(
+    name="worker",
+    help="Manage background maintenance and indexing worker.",
+)
 
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(memory_app, name="memory")
@@ -70,6 +77,7 @@ app.add_typer(project_app, name="project")
 app.add_typer(index_app, name="index")
 app.add_typer(ide_app, name="ide")
 app.add_typer(daemon_app, name="daemon")
+app.add_typer(worker_app, name="worker")
 
 console = Console()
 session_mgr = SessionManager()
@@ -77,6 +85,7 @@ memory_repo = MemoryRepository()
 project_repo = ProjectRepository()
 ide_registry = IDERegistry()
 daemon_client = DaemonClient()
+worker_service = BackgroundWorker()
 
 
 @app.callback(invoke_without_command=True)
@@ -485,21 +494,28 @@ def ide_open_file(
 @app.command()
 def task(
     objective: str = typer.Argument(..., help="High-level objective for autonomous agent."),
-    max_steps: int = typer.Option(8, "--max-steps", "-m", help="Maximum execution steps."),
+    max_steps: int = typer.Option(15, "--max-steps", "-m", help="Maximum execution steps."),
 ) -> None:
-    """Run autonomous multi-step agent workflow with tool execution and verification."""
+    """Run autonomous multi-step agent workflow with tool execution and ground-truth verification."""
     async def _run_agent():
         await init_db()
         orchestrator = AgentOrchestrator()
         console.print(f"[bold cyan]Starting task:[/bold cyan] {objective}")
 
-        with console.status("[bold green]Planning and executing steps..."):
+        with console.status("[bold green]Deliberating, executing, and verifying..."):
             state = await orchestrator.run(objective=objective, max_iterations=max_steps)
 
         console.print("\n[bold]Execution Steps:[/bold]")
         for record in state.tool_history:
             status_icon = "[green]✓[/green]" if record["success"] else "[red]✗[/red]"
-            console.print(f" {status_icon} [bold cyan]{record['tool']}[/bold cyan] [dim]{record['arguments']}[/dim]")
+            thought_text = f" | [italic dim]{record['thought'][:60]}...[/italic dim]" if record.get("thought") else ""
+            console.print(f" {status_icon} [bold cyan]{record['tool']}[/bold cyan] [dim]{record['arguments']}[/dim]{thought_text}")
+
+        if state.verification_results:
+            console.print("\n[bold]Verification Gate Results:[/bold]")
+            for v in state.verification_results:
+                v_icon = "[green]✓[/green]" if v["verified"] else "[red]✗[/red]"
+                console.print(f" {v_icon} [{v['ground_truth_source']}] {v['details']}")
 
         ans = state.final_answer or "Completed."
         parsed = extract_json_block(ans)
@@ -508,6 +524,66 @@ def task(
         console.print(f"\n[bold]Final Outcome:[/bold]\n{ans}")
 
     asyncio.run(_run_agent())
+
+
+@app.command("dependencies")
+def dependencies(
+    path: str = typer.Option(".", "--path", "-p", help="Directory to inspect for project dependencies."),
+) -> None:
+    """Inspect detected project manifests, lockfiles, package managers, and validation scripts."""
+    target_path = Path(path).resolve()
+    ecosystems = PackageManagerDetector.detect(target_path)
+    if not ecosystems:
+        console.print(f"[dim]No supported package manifests detected in {target_path}[/dim]")
+        return
+
+    table = Table(title=f"Detected Project Dependencies & Ecosystems ({target_path.name})", border_style="cyan")
+    table.add_column("Ecosystem", style="bold cyan", width=12)
+    table.add_column("Manifest File", style="green", width=18)
+    table.add_column("Lock File", style="yellow", width=18)
+    table.add_column("Package Manager", width=16)
+    table.add_column("Validation Command", style="dim white")
+
+    for eco in ecosystems:
+        table.add_row(
+            eco.ecosystem.capitalize(),
+            eco.manifest_file,
+            eco.lock_file or "-",
+            eco.package_manager,
+            eco.validate_command,
+        )
+
+    console.print(table)
+
+
+@app.command("verify")
+def verify(
+    file: str | None = typer.Option(None, "--file", "-f", help="Specific file path to verify exists and passes syntax validation."),
+    test: bool = typer.Option(False, "--test", "-t", help="Run project validation / test suite to verify no regressions."),
+) -> None:
+    """Run ground-truth outcome verification against OS, filesystem, and AST syntax."""
+    async def _run_verify():
+        verifier = OutcomeVerifier()
+        if file:
+            res = await verifier.verify_file_created_or_modified(file)
+            status_style = "bold green" if res.verified else "bold red"
+            status_text = "VERIFIED" if res.verified else "FAILED"
+            console.print(f"[{status_style}][{status_text}][/{status_style}] [{res.ground_truth_source}] {res.details}")
+            if not res.verified:
+                sys.exit(1)
+
+        if test or not file:
+            with console.status("[bold cyan]Running ground-truth test suite verification..."):
+                t_res = await verifier.verify_test_suite_passes()
+            status_style = "bold green" if t_res.verified else "bold red"
+            status_text = "VERIFIED" if t_res.verified else "FAILED"
+            console.print(f"[{status_style}][{status_text}][/{status_style}] [{t_res.ground_truth_source}] {t_res.details}")
+            if not t_res.verified:
+                if t_res.diagnostics.get("stderr_tail"):
+                    console.print(f"[red]{t_res.diagnostics['stderr_tail']}[/red]")
+                sys.exit(1)
+
+    asyncio.run(_run_verify())
 
 
 @app.command()

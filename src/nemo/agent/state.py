@@ -21,6 +21,10 @@ class AgentState(BaseModel):
     iteration: int = 0
     max_iterations: int = 10
     tool_history: list[dict[str, Any]] = Field(default_factory=list)
+    deliberation_history: list[dict[str, Any]] = Field(default_factory=list)
+    modified_files: list[str] = Field(default_factory=list)
+    verification_results: list[dict[str, Any]] = Field(default_factory=list)
+    verified: bool = False
     completed: bool = False
     final_answer: str | None = None
     error: str | None = None

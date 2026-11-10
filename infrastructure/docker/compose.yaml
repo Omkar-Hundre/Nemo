@@ -1,0 +1,47 @@
+# Local infrastructure deployment for PostgreSQL + pgvector, Neo4j, and Redis
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: nemo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nemo
+      POSTGRES_USER: nemo
+      POSTGRES_PASSWORD: nemo_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - nemo_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nemo -d nemo"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: nemo-neo4j
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: neo4j/nemo_dev_password
+      NEO4J_PLUGINS: '["apoc"]'
+    ports:
+      - "7474:7474" # Browser / HTTP
+      - "7687:7687" # Bolt
+    volumes:
+      - nemo_neo4jdata:/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: nemo-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - nemo_redisdata:/data
+
+volumes:
+  nemo_pgdata:
+  nemo_neo4jdata:
+  nemo_redisdata:
+

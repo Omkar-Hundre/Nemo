@@ -84,3 +84,4 @@ class NvidiaEmbeddingProvider:
 
 # 6. Public exports
 __all__ = ["NvidiaEmbeddingProvider", "cosine_similarity"]
+

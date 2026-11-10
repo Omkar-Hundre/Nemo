@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 
 # 2. Third-party imports
-# (None)
+import pytest
 
 # 3. Local / internal imports
 from nemo.agent.orchestrator import extract_json_block
@@ -38,7 +38,8 @@ def test_security_policy_and_boundaries():
         assert policy.assess_command_risk("rmdir /s /q C:\\Windows") == RiskLevel.L3
 
 
-async def async_test_tool_execution():
+@pytest.mark.asyncio
+async def test_tool_execution():
     """Verify tool execution via ToolRegistry."""
     with tempfile.TemporaryDirectory() as tmpdir:
         root = Path(tmpdir)
@@ -101,7 +102,7 @@ def main():
     print("Running Phase 8 & 9 agent tools and diagnosis verification...")
     test_security_policy_and_boundaries()
     print("✓ Security policy and boundary checks passed!")
-    asyncio.run(async_test_tool_execution())
+    asyncio.run(test_tool_execution())
     print("✓ Tool registry execution and security sandbox checks passed!")
     test_json_block_extraction()
     print("✓ Agent JSON block extraction checks passed!")
@@ -111,5 +112,5 @@ if __name__ == "__main__":
     main()
 
 # 6. Public exports
-__all__ = ["test_security_policy_and_boundaries", "async_test_tool_execution", "test_json_block_extraction"]
+__all__ = ["test_security_policy_and_boundaries", "test_tool_execution", "test_json_block_extraction"]
 

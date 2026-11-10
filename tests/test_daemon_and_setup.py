@@ -5,6 +5,7 @@ import asyncio
 
 # 2. Third-party imports
 import httpx
+import pytest
 
 # 3. Local / internal imports
 from nemo.daemon.server import app as daemon_app
@@ -14,7 +15,8 @@ from nemo.cli.setup import run_setup_wizard
 # (None)
 
 # 5. Core logic / classes / functions
-async def async_test_daemon_endpoints():
+@pytest.mark.asyncio
+async def test_daemon_endpoints():
     """Verify local daemon REST endpoints using async ASGI transport."""
     transport = httpx.ASGITransport(app=daemon_app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -46,7 +48,8 @@ async def async_test_daemon_endpoints():
         assert "DAEMON_TEST_OK" in exec_data["stdout"]
 
 
-async def async_test_setup_wizard():
+@pytest.mark.asyncio
+async def test_setup_wizard():
     """Verify setup wizard executes and reports status."""
     ok = await run_setup_wizard()
     assert ok, "Setup wizard should succeed with valid test environment"
@@ -54,9 +57,9 @@ async def async_test_setup_wizard():
 
 def main():
     print("Running Phase 10 daemon and Phase 11 setup verification...")
-    asyncio.run(async_test_daemon_endpoints())
+    asyncio.run(test_daemon_endpoints())
     print("✓ Daemon ASGI endpoints verified!")
-    asyncio.run(async_test_setup_wizard())
+    asyncio.run(test_setup_wizard())
     print("✓ Setup wizard checks passed!")
 
 
@@ -64,5 +67,5 @@ if __name__ == "__main__":
     main()
 
 # 6. Public exports
-__all__ = ["async_test_daemon_endpoints", "async_test_setup_wizard"]
+__all__ = ["test_daemon_endpoints", "test_setup_wizard"]
 

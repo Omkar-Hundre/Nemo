@@ -6,6 +6,7 @@ from pathlib import Path
 import tempfile
 
 # 2. Third-party imports
+import pytest
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 # 3. Local / internal imports
@@ -16,7 +17,8 @@ from nemo.memory.repository import MemoryRepository, ProjectRepository
 # (None)
 
 # 5. Core logic / classes / functions
-async def async_test_database_and_memory():
+@pytest.mark.asyncio
+async def test_database_and_memory():
     """Verify database schema creation and memory/project repository operations."""
     with tempfile.TemporaryDirectory() as tmpdir:
         test_db = Path(tmpdir) / "test_nemo.db"
@@ -86,7 +88,7 @@ async def async_test_database_and_memory():
 
 def main():
     print("Running Phase 4 database and memory verification...")
-    asyncio.run(async_test_database_and_memory())
+    asyncio.run(test_database_and_memory())
     print("✓ Phase 4 database and memory repository checks passed!")
 
 
@@ -94,5 +96,5 @@ if __name__ == "__main__":
     main()
 
 # 6. Public exports
-__all__ = ["async_test_database_and_memory"]
+__all__ = ["test_database_and_memory"]
 

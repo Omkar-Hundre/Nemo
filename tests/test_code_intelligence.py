@@ -105,3 +105,4 @@ __all__ = [
     "test_cosine_similarity",
     "test_knowledge_graph_builder",
 ]
+
