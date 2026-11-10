@@ -17,8 +17,10 @@ from nemo.ai.providers.nvidia import NvidiaNimProvider
 from nemo.ai.schemas import ChatMessage
 from nemo.cli.doctor import run_doctor
 from nemo.config.settings import get_settings
+from nemo.database.connection import init_db, resolve_database_url
 from nemo.execution.sessions.manager import SessionManager
 from nemo.execution.shells.native import NativeSubprocessExecutor
+from nemo.memory.repository import MemoryRepository, ProjectRepository
 
 # 4. Types, Protocols, Schemas
 # (None)
@@ -33,10 +35,23 @@ sessions_app = typer.Typer(
     name="sessions",
     help="Manage persistent terminal sessions and background jobs.",
 )
+memory_app = typer.Typer(
+    name="memory",
+    help="Inspect, query, and manage long-term developer memories.",
+)
+project_app = typer.Typer(
+    name="project",
+    help="Register and inspect workspace projects.",
+)
+
 app.add_typer(sessions_app, name="sessions")
+app.add_typer(memory_app, name="memory")
+app.add_typer(project_app, name="project")
 
 console = Console()
 session_mgr = SessionManager()
+memory_repo = MemoryRepository()
+project_repo = ProjectRepository()
 
 
 @app.command()
@@ -50,11 +65,13 @@ def status() -> None:
     """Display current system and environment status (fast, local only)."""
     settings = get_settings()
     has_key = bool(settings.nvidia_api_key and settings.nvidia_api_key.startswith("nvapi-"))
+    db_url = resolve_database_url()
     content = (
         f"[bold]Version:[/bold] {__version__}\n"
         f"[bold]Shell:[/bold] {settings.default_shell}\n"
         f"[bold]IDE:[/bold] {settings.default_ide}\n"
         f"[bold]Workspace:[/bold] {settings.workspace_root}\n"
+        f"[bold]Database:[/bold] {db_url}\n"
         f"[bold]Model:[/bold] {settings.nvidia_model}\n"
         f"[bold]API Key:[/bold] {'[green]Configured[/green]' if has_key else '[red]Missing[/red]'}"
     )
@@ -179,18 +196,129 @@ def stop_session(
         console.print(f"[red]Failed to terminate session '{session_id}'.[/red]")
 
 
+# --- Memory Commands ---
+@memory_app.command("init")
+def memory_init() -> None:
+    """Initialize database tables for memory and projects."""
+    asyncio.run(init_db())
+    console.print("[bold green]Database schema initialized successfully.[/bold green]")
+
+
+@memory_app.command("list")
+def memory_list(
+    limit: int = typer.Option(20, "--limit", "-n", help="Maximum memories to list."),
+) -> None:
+    """List recent memories."""
+    asyncio.run(init_db())
+    items = asyncio.run(memory_repo.list_memories(limit=limit))
+    if not items:
+        console.print("[dim]No memories stored yet.[/dim]")
+        return
+
+    table = Table(title="Stored Memories", border_style="bright_blue")
+    table.add_column("ID", style="dim", width=8)
+    table.add_column("Type", width=12)
+    table.add_column("Scope", width=10)
+    table.add_column("Content", style="white")
+
+    for m in items:
+        table.add_row(m.id[:8], m.type, m.scope, m.content)
+
+    console.print(table)
+
+
+@memory_app.command("search")
+def memory_search(
+    query: str = typer.Argument(..., help="Search query string."),
+    limit: int = typer.Option(10, "--limit", "-n", help="Maximum results."),
+) -> None:
+    """Search memories by content keywords."""
+    asyncio.run(init_db())
+    items = asyncio.run(memory_repo.search_memories(query, limit=limit))
+    if not items:
+        console.print(f"[dim]No memories matching '{query}'.[/dim]")
+        return
+
+    table = Table(title=f"Memory Search: '{query}'", border_style="bright_blue")
+    table.add_column("ID", style="dim", width=8)
+    table.add_column("Type", width=12)
+    table.add_column("Content", style="white")
+
+    for m in items:
+        table.add_row(m.id[:8], m.type, m.content)
+
+    console.print(table)
+
+
+@app.command()
+def remember(
+    fact: str = typer.Argument(..., help="Fact or technical decision to remember."),
+    scope: str = typer.Option("global", "--scope", "-s", help="Memory scope ('global' or 'project')."),
+    type: str = typer.Option("fact", "--type", "-t", help="Memory type ('fact', 'decision', 'preference')."),
+) -> None:
+    """Record a new fact or technical decision in memory."""
+    asyncio.run(init_db())
+    item = asyncio.run(memory_repo.add_memory(content=fact, scope=scope, memory_type=type))
+    console.print(f"[green]Remembered [dim]({item.id[:8]})[/dim]:[/green] {item.content}")
+
+
+# --- Project Commands ---
+@project_app.command("add")
+def project_add(
+    path: str = typer.Argument(..., help="Path to project workspace."),
+    name: str | None = typer.Option(None, "--name", "-n", help="Display name for project."),
+) -> None:
+    """Register a project workspace."""
+    asyncio.run(init_db())
+    p = Path(path).resolve()
+    if not p.exists():
+        console.print(f"[bold red]Path does not exist: {p}[/bold red]")
+        sys.exit(1)
+
+    proj_name = name or p.name
+    proj = asyncio.run(project_repo.register_project(name=proj_name, root_path=p))
+    console.print(f"[green]Project registered [bold]{proj.name}[/bold] [dim]({proj.id[:8]})[/dim] at {proj.root_path}[/green]")
+
+
+@project_app.command("list")
+def project_list() -> None:
+    """List all registered projects."""
+    asyncio.run(init_db())
+    projects = asyncio.run(project_repo.list_projects())
+    if not projects:
+        console.print("[dim]No projects registered yet.[/dim]")
+        return
+
+    table = Table(title="Registered Projects", border_style="bright_blue")
+    table.add_column("ID", style="dim", width=8)
+    table.add_column("Name", style="bold cyan", width=20)
+    table.add_column("Root Path", style="white")
+
+    for p in projects:
+        table.add_row(p.id[:8], p.name, p.root_path)
+
+    console.print(table)
+
+
 @app.command()
 def ask(
     prompt: str = typer.Argument(..., help="Natural language question or request."),
 ) -> None:
-    """Ask a question to NVIDIA Nemotron and stream the response."""
+    """Ask a question to NVIDIA Nemotron with memory recall."""
     async def _stream_query():
+        await init_db()
+        memories = await memory_repo.search_memories(prompt, limit=5)
+        memory_context = ""
+        if memories:
+            memory_context = "\n\nRelevant long-term memories:\n" + "\n".join(f"- {m.content}" for m in memories)
+
         provider = NvidiaNimProvider()
+        system_prompt = (
+            "You are NEMO, an AI-native developer operating assistant for Windows."
+            + memory_context
+        )
         messages = [
-            ChatMessage(
-                role="system",
-                content="You are NEMO, an AI-native developer operating assistant.",
-            ),
+            ChatMessage(role="system", content=system_prompt),
             ChatMessage(role="user", content=prompt),
         ]
         async for chunk in provider.stream(messages):
