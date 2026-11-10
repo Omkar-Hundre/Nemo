@@ -206,8 +206,43 @@ def daemon_start(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        pid_file = Path.home() / ".nemo" / "daemon.pid"
+        pid_file.parent.mkdir(parents=True, exist_ok=True)
+        pid_file.write_text(str(proc.pid))
         console.print(f"[green]Daemon started in background (PID {proc.pid}) at http://127.0.0.1:{port}[/green]")
         return
+
+
+@daemon_app.command("stop")
+def daemon_stop(
+    port: int = typer.Option(8765, "--port", "-p", help="Port of daemon server."),
+) -> None:
+    """Stop running local background daemon server."""
+    pid_file = Path.home() / ".nemo" / "daemon.pid"
+    stopped = False
+
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text().strip())
+            res = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
+            pid_file.unlink(missing_ok=True)
+            if res.returncode == 0:
+                stopped = True
+        except Exception:
+            pass
+
+    from nemo.tools.builtin import PortManagerTool
+    pm = PortManagerTool()
+    owner = pm._find_port_owner(port)
+    if owner:
+        res = subprocess.run(["taskkill", "/PID", str(owner["pid"]), "/T", "/F"], capture_output=True)
+        if res.returncode == 0:
+            stopped = True
+
+    if stopped:
+        console.print("[green]Daemon stopped successfully.[/green]")
+    else:
+        console.print("[dim]No running daemon found on port 8765.[/dim]")
 
     console.print(f"[bold cyan]Starting NEMO Daemon on http://127.0.0.1:{port}...[/bold cyan]")
     uvicorn.run(daemon_fastapi_app, host="127.0.0.1", port=port, log_level="info")

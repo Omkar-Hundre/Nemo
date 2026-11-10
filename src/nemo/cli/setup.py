@@ -54,8 +54,10 @@ async def run_setup_wizard(custom_key: str | None = None) -> bool:
     settings = get_settings()
     key = custom_key or settings.nvidia_api_key
     if custom_key:
-        env_file = Path(".env")
-        env_file.write_text(f"NVIDIA_API_KEY={custom_key}\n", encoding="utf-8")
+        global_env = Path.home() / ".nemo" / ".env"
+        global_env.parent.mkdir(parents=True, exist_ok=True)
+        global_env.write_text(f"NVIDIA_API_KEY={custom_key}\n", encoding="utf-8")
+        Path(".env").write_text(f"NVIDIA_API_KEY={custom_key}\n", encoding="utf-8")
         settings.nvidia_api_key = custom_key
 
     has_key = bool(key and key.startswith("nvapi-"))
