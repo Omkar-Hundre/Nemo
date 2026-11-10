@@ -4,13 +4,16 @@
 import ast
 import asyncio
 import csv
+import ctypes
 import html
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shutil
 import socket
+import sqlite3
 import subprocess
 import time
 from typing import Any
@@ -2173,6 +2176,693 @@ class DeployAnalysisTool(BaseTool):
             },
         )
 
+
+class GitOperationsTool(BaseTool):
+    """Executes safe, native Git operations: status, branch, stage, unstage, commit, push, log, and checkout."""
+    name = "git_operations"
+    description = (
+        "Manage Git repositories natively: inspect status, create or switch branches, stage files, "
+        "commit changes, push to remotes, and view commit logs."
+    )
+    risk_level = RiskLevel.L2
+
+    def __init__(self) -> None:
+        self.executor = NativeSubprocessExecutor()
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["status", "branch", "checkout", "stage", "unstage", "commit", "push", "log", "diff"],
+                        "description": "Git action to perform.",
+                    },
+                    "path": {"type": "string", "description": "Repository path (default '.')."},
+                    "files": {"type": "array", "items": {"type": "string"}, "description": "Files to stage or unstage."},
+                    "message": {"type": "string", "description": "Commit message (required for 'commit')."},
+                    "branch_name": {"type": "string", "description": "Branch name (for 'branch' or 'checkout')."},
+                    "create_branch": {"type": "boolean", "description": "Whether to create a new branch during checkout (-b)."},
+                    "remote": {"type": "string", "description": "Remote name for push (default 'origin')."},
+                    "set_upstream": {"type": "boolean", "description": "Set upstream tracking on push (-u)."},
+                    "limit": {"type": "integer", "description": "Maximum commits to return for 'log' (default 10)."},
+                },
+                "required": ["action"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        target_path = (base_dir / arguments.get("path", ".")).resolve()
+        action = arguments.get("action", "").lower().strip()
+
+        if not (target_path / ".git").exists():
+            return ToolResult(success=False, error=f"Target directory is not a Git repository: {target_path}")
+
+        try:
+            if action == "status":
+                branch_res = await self.executor.execute("git branch --show-current", cwd=target_path)
+                current_branch = branch_res.stdout.strip() if branch_res.is_success else "unknown"
+
+                status_res = await self.executor.execute("git status --porcelain", cwd=target_path)
+                lines = [line.rstrip() for line in status_res.stdout.splitlines() if line.strip()]
+
+                staged: list[str] = []
+                unstaged: list[str] = []
+                untracked: list[str] = []
+
+                for l in lines:
+                    if len(l) < 3:
+                        continue
+                    index_stat = l[0]
+                    work_stat = l[1]
+                    fname = l[3:].strip()
+                    if index_stat == "?" and work_stat == "?":
+                        untracked.append(fname)
+                    else:
+                        if index_stat not in (" ", "?"):
+                            staged.append(fname)
+                        if work_stat != " ":
+                            unstaged.append(fname)
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "status",
+                        "branch": current_branch,
+                        "is_clean": len(lines) == 0,
+                        "staged": staged,
+                        "unstaged": unstaged,
+                        "untracked": untracked,
+                        "total_changes": len(lines),
+                    },
+                )
+
+            elif action == "branch":
+                b_name = arguments.get("branch_name", "").strip()
+                if b_name:
+                    res = await self.executor.execute(f"git branch {b_name}", cwd=target_path)
+                    if not res.is_success:
+                        return ToolResult(success=False, error=f"Failed to create branch: {res.stderr or res.stdout}")
+                    return ToolResult(success=True, data={"action": "branch", "created": b_name})
+                else:
+                    res = await self.executor.execute("git branch -a", cwd=target_path)
+                    branches = [b.strip().lstrip("* ").strip() for b in res.stdout.splitlines() if b.strip()]
+                    return ToolResult(success=True, data={"action": "branch", "branches": branches})
+
+            elif action == "checkout":
+                b_name = arguments.get("branch_name", "").strip()
+                if not b_name:
+                    return ToolResult(success=False, error="branch_name is required for checkout action.")
+                create = arguments.get("create_branch", False)
+                flag = "-b " if create else ""
+                res = await self.executor.execute(f"git checkout {flag}{b_name}", cwd=target_path)
+                if not res.is_success:
+                    return ToolResult(success=False, error=f"Failed to checkout branch: {res.stderr or res.stdout}")
+                return ToolResult(success=True, data={"action": "checkout", "branch": b_name, "created": create})
+
+            elif action == "stage":
+                files = arguments.get("files", [])
+                targets = " ".join(f'"{f}"' for f in files) if files else "."
+                res = await self.executor.execute(f"git add {targets}", cwd=target_path)
+                if not res.is_success:
+                    return ToolResult(success=False, error=f"Failed to stage files: {res.stderr or res.stdout}")
+                return ToolResult(success=True, data={"action": "stage", "staged_targets": files or ["."]})
+
+            elif action == "unstage":
+                files = arguments.get("files", [])
+                targets = " ".join(f'"{f}"' for f in files) if files else "."
+                res = await self.executor.execute(f"git restore --staged {targets}", cwd=target_path)
+                if not res.is_success and "could not resolve 'HEAD'" in res.stderr:
+                    res = await self.executor.execute(f"git rm --cached -r {targets}", cwd=target_path)
+                if not res.is_success:
+                    return ToolResult(success=False, error=f"Failed to unstage files: {res.stderr or res.stdout}")
+                return ToolResult(success=True, data={"action": "unstage", "unstaged_targets": files or ["."]})
+
+            elif action == "commit":
+                msg = arguments.get("message", "").strip()
+                if not msg:
+                    return ToolResult(success=False, error="Commit message is required.")
+                safe_msg = msg.replace('"', '\\"')
+                res = await self.executor.execute(f'git commit -m "{safe_msg}"', cwd=target_path)
+                if not res.is_success:
+                    return ToolResult(success=False, error=f"Git commit failed: {res.stderr or res.stdout}")
+
+                hash_res = await self.executor.execute("git rev-parse --short HEAD", cwd=target_path)
+                commit_hash = hash_res.stdout.strip() if hash_res.is_success else "unknown"
+                return ToolResult(success=True, data={"action": "commit", "commit_hash": commit_hash, "message": msg})
+
+            elif action == "push":
+                remote = arguments.get("remote", "origin").strip()
+                set_upstream = arguments.get("set_upstream", False)
+                branch_res = await self.executor.execute("git branch --show-current", cwd=target_path)
+                curr_branch = branch_res.stdout.strip() if branch_res.is_success else "main"
+                u_flag = "-u " if set_upstream else ""
+                res = await self.executor.execute(f"git push {u_flag}{remote} {curr_branch}", cwd=target_path)
+                if not res.is_success:
+                    return ToolResult(success=False, error=f"Git push failed: {res.stderr or res.stdout}")
+                return ToolResult(success=True, data={"action": "push", "remote": remote, "branch": curr_branch, "output": res.stdout.strip()})
+
+            elif action == "log":
+                limit = int(arguments.get("limit", 10))
+                res = await self.executor.execute(f'git log -n {limit} --pretty=format:"%H|%an|%ad|%s" --date=short', cwd=target_path)
+                commits = []
+                for l in res.stdout.splitlines():
+                    if "|" in l:
+                        parts = l.split("|", 3)
+                        if len(parts) == 4:
+                            commits.append({"hash": parts[0], "author": parts[1], "date": parts[2], "message": parts[3]})
+                return ToolResult(success=True, data={"action": "log", "count": len(commits), "commits": commits})
+
+            elif action == "diff":
+                res = await self.executor.execute("git diff --stat", cwd=target_path)
+                staged_diff = await self.executor.execute("git diff --cached --stat", cwd=target_path)
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "diff",
+                        "unstaged_stat": res.stdout.strip(),
+                        "staged_stat": staged_diff.stdout.strip(),
+                    },
+                )
+
+            else:
+                return ToolResult(success=False, error=f"Unsupported Git action: '{action}'")
+
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Git operation failed: {exc}")
+
+
+class DatabaseExplorerTool(BaseTool):
+    """Inspects and queries SQLite databases safely with schema analysis and read-only execution."""
+    name = "database_inspector"
+    description = (
+        "Inspect database schemas, list tables, column definitions, foreign keys, row counts, "
+        "and execute safe read-only queries with structured results."
+    )
+    risk_level = RiskLevel.L1
+
+    def __init__(self, policy: SecurityPolicy | None = None) -> None:
+        self.policy = policy or SecurityPolicy()
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Database file path (e.g. 'nemo.db', 'data/app.db')."},
+                    "action": {
+                        "type": "string",
+                        "enum": ["list_tables", "schema", "query"],
+                        "description": "Database action to perform.",
+                    },
+                    "table": {"type": "string", "description": "Table name (for 'schema' action)."},
+                    "query": {"type": "string", "description": "SQL query string (for 'query' action)."},
+                    "limit": {"type": "integer", "description": "Maximum rows to return for 'query' (default 50)."},
+                    "allow_write": {"type": "boolean", "description": "Allow data-modifying queries (INSERT/UPDATE/DELETE). Default false."},
+                },
+                "required": ["path", "action"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        raw_path = arguments.get("path", "")
+        if not raw_path:
+            return ToolResult(success=False, error="path is required.")
+
+        p_str = str(raw_path).replace("$env:USERPROFILE", str(Path.home())).replace("~", str(Path.home()))
+        db_path = (base_dir / p_str).resolve() if not Path(p_str).is_absolute() else Path(p_str).resolve()
+
+        if not self.policy.is_path_safe(db_path, base_dir=base_dir):
+            return ToolResult(success=False, error=f"Access denied: database path outside allowed boundary ({db_path})")
+
+        if not db_path.exists():
+            return ToolResult(success=False, error=f"Database file does not exist: {db_path}")
+
+        action = arguments.get("action", "").lower().strip()
+        allow_write = bool(arguments.get("allow_write", False))
+
+        try:
+            uri = f"file:{db_path.as_posix()}?mode=ro" if not allow_write else f"file:{db_path.as_posix()}?mode=rwc"
+            conn = sqlite3.connect(uri, uri=True, timeout=5.0)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            if action == "list_tables":
+                cursor.execute(
+                    "SELECT name, type FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name;"
+                )
+                tables_meta = []
+                for row in cursor.fetchall():
+                    t_name = row["name"]
+                    t_type = row["type"]
+                    row_count = 0
+                    try:
+                        c_cnt = conn.cursor()
+                        c_cnt.execute(f'SELECT COUNT(*) FROM "{t_name}";')
+                        row_count = c_cnt.fetchone()[0]
+                    except Exception:
+                        pass
+                    tables_meta.append({"name": t_name, "type": t_type, "row_count": row_count})
+
+                conn.close()
+                return ToolResult(
+                    success=True,
+                    data={"database": str(db_path), "table_count": len(tables_meta), "tables": tables_meta},
+                )
+
+            elif action == "schema":
+                table_name = arguments.get("table", "").strip()
+                if not table_name:
+                    conn.close()
+                    return ToolResult(success=False, error="table parameter is required for 'schema' action.")
+
+                cursor.execute(f'PRAGMA table_info("{table_name}");')
+                cols = [
+                    {
+                        "cid": r[0],
+                        "name": r[1],
+                        "type": r[2],
+                        "notnull": bool(r[3]),
+                        "default_value": r[4],
+                        "primary_key": bool(r[5]),
+                    }
+                    for r in cursor.fetchall()
+                ]
+
+                cursor.execute(f'PRAGMA foreign_key_list("{table_name}");')
+                fks = [
+                    {"id": r[0], "seq": r[1], "target_table": r[2], "from_col": r[3], "to_col": r[4]}
+                    for r in cursor.fetchall()
+                ]
+
+                cursor.execute(f'PRAGMA index_list("{table_name}");')
+                indexes = [{"name": r[1], "unique": bool(r[2])} for r in cursor.fetchall()]
+
+                conn.close()
+                return ToolResult(
+                    success=True,
+                    data={
+                        "database": str(db_path),
+                        "table": table_name,
+                        "column_count": len(cols),
+                        "columns": cols,
+                        "foreign_keys": fks,
+                        "indexes": indexes,
+                    },
+                )
+
+            elif action == "query":
+                sql = arguments.get("query", "").strip()
+                if not sql:
+                    conn.close()
+                    return ToolResult(success=False, error="query parameter is required for 'query' action.")
+
+                if not allow_write:
+                    first_word = sql.split()[0].upper() if sql.split() else ""
+                    if first_word not in ("SELECT", "PRAGMA", "EXPLAIN", "WITH"):
+                        conn.close()
+                        return ToolResult(
+                            success=False,
+                            error=f"Permission denied: Query starts with '{first_word}'. Only read-only queries (SELECT/PRAGMA/EXPLAIN/WITH) are permitted without allow_write=true.",
+                        )
+
+                t0 = time.perf_counter()
+                cursor.execute(sql)
+                limit = int(arguments.get("limit", 50))
+                rows_raw = cursor.fetchmany(limit)
+                elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
+
+                col_names = [d[0] for d in cursor.description] if cursor.description else []
+                formatted_rows = [[r[c] for c in col_names] for r in rows_raw]
+
+                if allow_write:
+                    conn.commit()
+                conn.close()
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "database": str(db_path),
+                        "query": sql,
+                        "columns": col_names,
+                        "row_count": len(formatted_rows),
+                        "execution_time_ms": elapsed_ms,
+                        "rows": formatted_rows,
+                    },
+                )
+
+            else:
+                conn.close()
+                return ToolResult(success=False, error=f"Unsupported database action: '{action}'")
+
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Database inspector error: {exc}")
+
+
+class ApiTesterTool(BaseTool):
+    """Executes HTTP REST / GraphQL requests with headers, query parameters, payloads, and latency timing."""
+    name = "api_tester"
+    description = (
+        "Execute HTTP requests (GET, POST, PUT, PATCH, DELETE, HEAD) with custom headers, query params, "
+        "authentication tokens, JSON payloads, and response inspection."
+    )
+    risk_level = RiskLevel.L1
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Target endpoint URL."},
+                    "method": {
+                        "type": "string",
+                        "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"],
+                        "default": "GET",
+                        "description": "HTTP method.",
+                    },
+                    "headers": {"type": "object", "description": "Optional HTTP headers dictionary."},
+                    "params": {"type": "object", "description": "Optional query string parameters dictionary."},
+                    "json_data": {"type": "object", "description": "Optional JSON body payload for POST/PUT/PATCH."},
+                    "form_data": {"type": "object", "description": "Optional form-urlencoded data."},
+                    "auth_bearer": {"type": "string", "description": "Optional Bearer authentication token."},
+                    "timeout_seconds": {"type": "number", "default": 15.0, "description": "Request timeout in seconds."},
+                },
+                "required": ["url"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        url = arguments.get("url", "").strip()
+        if not url:
+            return ToolResult(success=False, error="url parameter is required.")
+
+        method = arguments.get("method", "GET").upper().strip()
+        headers = dict(arguments.get("headers") or {})
+        params = arguments.get("params")
+        json_data = arguments.get("json_data")
+        form_data = arguments.get("form_data")
+        auth_bearer = arguments.get("auth_bearer")
+        timeout = float(arguments.get("timeout_seconds", 15.0))
+
+        if auth_bearer:
+            headers["Authorization"] = f"Bearer {auth_bearer}"
+
+        try:
+            t0 = time.perf_counter()
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                resp = await client.request(
+                    method=method,
+                    url=url,
+                    headers=headers,
+                    params=params,
+                    json=json_data,
+                    data=form_data,
+                )
+            elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
+
+            parsed_json = None
+            try:
+                parsed_json = resp.json()
+            except Exception:
+                pass
+
+            text_preview = resp.text[:15000] if resp.text else ""
+
+            return ToolResult(
+                success=True,
+                data={
+                    "url": str(resp.url),
+                    "method": method,
+                    "status_code": resp.status_code,
+                    "is_success": resp.is_success,
+                    "response_time_ms": elapsed_ms,
+                    "content_type": resp.headers.get("content-type", ""),
+                    "headers": dict(resp.headers),
+                    "json": parsed_json,
+                    "text": text_preview,
+                },
+            )
+
+        except Exception as exc:
+            return ToolResult(success=False, error=f"API request failed: {exc}")
+
+
+class SystemInspectorTool(BaseTool):
+    """Inspects live Windows system hardware, CPU cores, RAM utilization, disk usage, active ports, and processes."""
+    name = "system_inspector"
+    description = (
+        "Inspect live Windows hardware metrics (CPU cores, RAM load, disk space), list active processes "
+        "and listening ports, and terminate runaway dev processes safely."
+    )
+    risk_level = RiskLevel.L1
+
+    PROTECTED_PROCESSES = {
+        "explorer.exe", "svchost.exe", "csrss.exe", "wininit.exe",
+        "services.exe", "system", "smss.exe", "lsass.exe", "winlogon.exe"
+    }
+
+    def __init__(self) -> None:
+        self.executor = NativeSubprocessExecutor()
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["summary", "processes", "ports", "kill"],
+                        "description": "System inspection action.",
+                    },
+                    "filter_name": {"type": "string", "description": "Optional process name filter (for 'processes')."},
+                    "limit": {"type": "integer", "description": "Maximum items to return (default 25)."},
+                    "pid": {"type": "integer", "description": "Process ID to terminate (for 'kill')."},
+                    "process_name": {"type": "string", "description": "Process image name to terminate (for 'kill')."},
+                },
+                "required": ["action"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        action = arguments.get("action", "summary").lower().strip()
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+
+        try:
+            if action == "summary":
+                cpu_count = os.cpu_count() or 1
+                ram_info = {"total_gb": 0.0, "available_gb": 0.0, "used_percent": 0}
+
+                try:
+                    class _MEMORYSTATUSEX(ctypes.Structure):
+                        _fields_ = [
+                            ("dwLength", ctypes.c_ulong),
+                            ("dwMemoryLoad", ctypes.c_ulong),
+                            ("ullTotalPhys", ctypes.c_ulonglong),
+                            ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong),
+                            ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong),
+                            ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+                        ]
+                    m = _MEMORYSTATUSEX()
+                    m.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
+                    if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+                        ram_info = {
+                            "total_gb": round(m.ullTotalPhys / (1024**3), 2),
+                            "available_gb": round(m.ullAvailPhys / (1024**3), 2),
+                            "used_percent": int(m.dwMemoryLoad),
+                        }
+                except Exception:
+                    pass
+
+                disk = shutil.disk_usage(str(base_dir))
+                disk_info = {
+                    "total_gb": round(disk.total / (1024**3), 2),
+                    "free_gb": round(disk.free / (1024**3), 2),
+                    "used_gb": round(disk.used / (1024**3), 2),
+                    "used_percent": round((disk.used / disk.total) * 100, 1),
+                }
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "summary",
+                        "os": platform.platform(),
+                        "cpu_logical_cores": cpu_count,
+                        "ram": ram_info,
+                        "disk": disk_info,
+                    },
+                )
+
+            elif action == "processes":
+                limit = int(arguments.get("limit", 25))
+                filter_name = arguments.get("filter_name", "").lower().strip()
+                res = await self.executor.execute("tasklist /FO CSV /NH", cwd=base_dir)
+
+                procs = []
+                for line in res.stdout.splitlines():
+                    parts = [p.strip().strip('"') for p in line.split('","')]
+                    if len(parts) >= 5:
+                        p_name = parts[0]
+                        p_pid = parts[1]
+                        p_mem = parts[4]
+                        if filter_name and filter_name not in p_name.lower():
+                            continue
+                        procs.append({"name": p_name, "pid": p_pid, "memory": p_mem})
+
+                return ToolResult(
+                    success=True,
+                    data={"action": "processes", "total_found": len(procs), "processes": procs[:limit]},
+                )
+
+            elif action == "ports":
+                res = await self.executor.execute("netstat -ano -p tcp", cwd=base_dir)
+                ports = []
+                for line in res.stdout.splitlines():
+                    tokens = line.split()
+                    if len(tokens) >= 5 and tokens[3] == "LISTENING":
+                        ports.append({
+                            "protocol": tokens[0],
+                            "local_address": tokens[1],
+                            "state": tokens[3],
+                            "pid": tokens[4],
+                        })
+
+                return ToolResult(
+                    success=True,
+                    data={"action": "ports", "listening_count": len(ports), "ports": ports[:arguments.get("limit", 50)]},
+                )
+
+            elif action == "kill":
+                pid = arguments.get("pid")
+                proc_name = arguments.get("process_name", "").strip()
+
+                if proc_name and proc_name.lower() in self.PROTECTED_PROCESSES:
+                    return ToolResult(success=False, error=f"Permission denied: '{proc_name}' is a protected Windows core process.")
+
+                if pid:
+                    res = await self.executor.execute(f"taskkill /F /PID {pid}", cwd=base_dir)
+                elif proc_name:
+                    res = await self.executor.execute(f"taskkill /F /IM {proc_name}", cwd=base_dir)
+                else:
+                    return ToolResult(success=False, error="Either pid or process_name is required for 'kill' action.")
+
+                if not res.is_success:
+                    return ToolResult(success=False, error=f"Failed to kill process: {res.stderr or res.stdout}")
+
+                return ToolResult(
+                    success=True,
+                    data={"action": "kill", "target": pid or proc_name, "message": res.stdout.strip()},
+                )
+
+            else:
+                return ToolResult(success=False, error=f"Unsupported system action: '{action}'")
+
+        except Exception as exc:
+            return ToolResult(success=False, error=f"System inspector error: {exc}")
+
+
+class WindowsDesktopTool(BaseTool):
+    """Native Windows desktop integration: copy and read clipboard data, and trigger desktop toast notifications."""
+    name = "desktop_integration"
+    description = (
+        "Interact with Windows desktop: copy text to clipboard, read current clipboard content, "
+        "and display native desktop toast notifications on task completion."
+    )
+    risk_level = RiskLevel.L1
+
+    def __init__(self) -> None:
+        self.executor = NativeSubprocessExecutor()
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["clipboard_copy", "clipboard_read", "notify"],
+                        "description": "Desktop action to perform.",
+                    },
+                    "text": {"type": "string", "description": "Text to copy to clipboard (for 'clipboard_copy')."},
+                    "title": {"type": "string", "description": "Notification title (for 'notify'). Default 'NEMO Assistant'."},
+                    "message": {"type": "string", "description": "Notification message (for 'notify')."},
+                },
+                "required": ["action"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        action = arguments.get("action", "").lower().strip()
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+
+        try:
+            if action == "clipboard_copy":
+                text = arguments.get("text", "")
+                proc = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", "Set-Clipboard -Value $input"],
+                    input=text,
+                    text=True,
+                    capture_output=True,
+                )
+                if proc.returncode != 0:
+                    return ToolResult(success=False, error=f"Failed to copy to clipboard: {proc.stderr}")
+                return ToolResult(success=True, data={"action": "clipboard_copy", "copied_length": len(text)})
+
+            elif action == "clipboard_read":
+                proc = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", "Get-Clipboard"],
+                    capture_output=True,
+                    text=True,
+                )
+                if proc.returncode != 0:
+                    return ToolResult(success=False, error=f"Failed to read clipboard: {proc.stderr}")
+                content = proc.stdout.rstrip("\r\n")
+                return ToolResult(success=True, data={"action": "clipboard_read", "content": content, "length": len(content)})
+
+            elif action == "notify":
+                title = arguments.get("title", "NEMO Assistant")
+                msg = arguments.get("message", "Task completed.")
+                clean_title = title.replace('"', '\\"')
+                clean_msg = msg.replace('"', '\\"')
+                # Lightweight PowerShell balloon notification
+                cmd = (
+                    f'[void][System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms"); '
+                    f'$n = New-Object System.Windows.Forms.NotifyIcon; '
+                    f'$n.Icon = [System.Drawing.SystemIcons]::Information; '
+                    f'$n.BalloonTipTitle = "{clean_title}"; '
+                    f'$n.BalloonTipText = "{clean_msg}"; '
+                    f'$n.Visible = $True; '
+                    f'$n.ShowBalloonTip(2000);'
+                )
+                subprocess.Popen(["powershell", "-NoProfile", "-Command", cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return ToolResult(success=True, data={"action": "notify", "title": title, "message": msg, "delivered": True})
+
+            else:
+                return ToolResult(success=False, error=f"Unsupported desktop action: '{action}'")
+
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Desktop integration error: {exc}")
+
 # 6. Public exports
 __all__ = [
     "CodebaseSummaryTool",
@@ -2202,4 +2892,9 @@ __all__ = [
     "DocumentGeneratorTool",
     "PresentationGeneratorTool",
     "DeployAnalysisTool",
+    "GitOperationsTool",
+    "DatabaseExplorerTool",
+    "ApiTesterTool",
+    "SystemInspectorTool",
+    "WindowsDesktopTool",
 ]

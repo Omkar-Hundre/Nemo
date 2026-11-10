@@ -9,17 +9,22 @@
 # 3. Local / internal imports
 from nemo.tools.base import BaseTool, ToolDefinition
 from nemo.tools.builtin import (
+    ApiTesterTool,
     CodebaseSummaryTool,
     CodeSearchTool,
     CreateFolderTool,
+    DatabaseExplorerTool,
     DeployAnalysisTool,
+    GitOperationsTool,
     IDEOpenTool,
     ListDirectoryTool,
     MemoryRecallTool,
     ReadFileTool,
     SemanticSearchTool,
     SymbolLookupTool,
+    SystemInspectorTool,
     TerminalTool,
+    WindowsDesktopTool,
     WriteFileTool,
 )
 from nemo.tools.registry import ToolRegistry
@@ -44,6 +49,11 @@ __all__ = [
     "CreateFolderTool",
     "WriteFileTool",
     "DeployAnalysisTool",
+    "GitOperationsTool",
+    "DatabaseExplorerTool",
+    "ApiTesterTool",
+    "SystemInspectorTool",
+    "WindowsDesktopTool",
     "ListDirectoryTool",
     "MemoryRecallTool",
     "IDEOpenTool",

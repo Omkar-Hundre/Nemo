@@ -12,16 +12,19 @@ from nemo.security.policy import SecurityPolicy
 from nemo.tools.base import BaseTool, ToolDefinition
 from nemo.tools.builtin import (
     ASTStructuralSearchTool,
+    ApiTesterTool,
     CodebaseSummaryTool,
     CodeGraphQueryTool,
     CodeSearchTool,
     CreateFolderTool,
+    DatabaseExplorerTool,
     DeployAnalysisTool,
     DocumentGeneratorTool,
     DocumentReaderTool,
     EnvConfigInspectorTool,
     FindFilesTool,
     GitDiffTool,
+    GitOperationsTool,
     HttpProbeTool,
     IDEOpenTool,
     LaunchBackgroundProcessTool,
@@ -36,7 +39,9 @@ from nemo.tools.builtin import (
     ScaffoldProjectTool,
     SemanticSearchTool,
     SymbolLookupTool,
+    SystemInspectorTool,
     TerminalTool,
+    WindowsDesktopTool,
     WriteFileTool,
 )
 
@@ -88,6 +93,13 @@ class ToolRegistry:
         self.register(PresentationGeneratorTool())
         self.register(MemoryRecallTool())
         self.register(IDEOpenTool())
+
+        # 5. Core Developer Beast Tools (Git, Database, API, System, Desktop)
+        self.register(GitOperationsTool())
+        self.register(DatabaseExplorerTool(policy=self.policy))
+        self.register(ApiTesterTool())
+        self.register(SystemInspectorTool())
+        self.register(WindowsDesktopTool())
 
     def register(self, tool: BaseTool) -> None:
         """Register a new tool."""
