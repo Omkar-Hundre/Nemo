@@ -80,3 +80,4 @@ class CursorAdapter(IDEAdapter):
 
 # 6. Public exports
 __all__ = ["CursorAdapter"]
+

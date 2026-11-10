@@ -4,6 +4,7 @@
 import ast
 import asyncio
 import csv
+import html
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,8 @@ import webbrowser
 
 # 2. Third-party imports
 import docx
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Inches, Pt, RGBColor
 import httpx
 import pypdf
 
@@ -1123,7 +1126,7 @@ class FindFilesTool(BaseTool):
     async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
         pattern = arguments.get("pattern", "*").strip()
         path_arg = arguments.get("path", ".")
-        limit = int(arguments.get("limit", 50))
+        limit = int(arguments.get("limit") or arguments.get("max_results") or 50)
 
         base_dir = Path(context.get("working_directory", Path.cwd()))
         root = (base_dir / path_arg).resolve()
@@ -1381,6 +1384,9 @@ class DocumentReaderTool(BaseTool):
     description = "Read and extract text, tables, and metadata from documents (.pdf, .docx, .csv, .tsv, .md, .txt, .json)."
     risk_level = RiskLevel.L0
 
+    def __init__(self, policy: SecurityPolicy | None = None) -> None:
+        self.policy = policy or SecurityPolicy()
+
     def get_definition(self) -> ToolDefinition:
         return ToolDefinition(
             name=self.name,
@@ -1391,6 +1397,7 @@ class DocumentReaderTool(BaseTool):
                     "path": {"type": "string", "description": "Path to document file."},
                     "max_pages": {"type": "integer", "description": "Maximum pages to extract from PDF (default 25)."},
                     "max_rows": {"type": "integer", "description": "Maximum rows to preview from CSV (default 50)."},
+                    "delimiter": {"type": "string", "description": "Optional CSV delimiter override (e.g. ',', ';', '\\t', '|')."},
                 },
                 "required": ["path"],
             },
@@ -1399,7 +1406,16 @@ class DocumentReaderTool(BaseTool):
 
     async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
         base_dir = Path(context.get("working_directory", Path.cwd()))
-        doc_path = (base_dir / arguments.get("path", "")).resolve()
+        raw_path = arguments.get("path", "")
+        if not raw_path:
+            return ToolResult(success=False, error="Path is required.")
+
+        p_str = str(raw_path).replace("$env:USERPROFILE", str(Path.home())).replace("~", str(Path.home()))
+        doc_path = (base_dir / p_str).resolve() if not Path(p_str).is_absolute() else Path(p_str).resolve()
+
+        if not self.policy.is_path_safe(doc_path, base_dir=base_dir):
+            return ToolResult(success=False, error=f"Access denied: path outside allowed boundary ({doc_path})")
+
         max_pages = int(arguments.get("max_pages", 25))
         max_rows = int(arguments.get("max_rows", 50))
 
@@ -1417,41 +1433,93 @@ class DocumentReaderTool(BaseTool):
                 for idx in range(pages_to_read):
                     text = reader.pages[idx].extract_text() or ""
                     extracted_pages.append(f"--- Page {idx + 1} ---\n{text}")
+                
+                pdf_meta = {}
+                if reader.metadata:
+                    for k, v in reader.metadata.items():
+                        clean_k = str(k).lstrip("/").lower()
+                        pdf_meta[clean_k] = str(v)
+
                 return ToolResult(
                     success=True,
                     data={
                         "format": "pdf",
                         "total_pages": total_pages,
                         "pages_extracted": pages_to_read,
+                        "metadata": pdf_meta,
+                        "is_encrypted": reader.is_encrypted,
                         "content": "\n\n".join(extracted_pages),
                     },
                 )
 
             elif ext == ".docx":
                 doc = docx.Document(str(doc_path))
-                paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+                paragraphs = []
+                headings = []
+                for p in doc.paragraphs:
+                    t = p.text.strip()
+                    if not t:
+                        continue
+                    paragraphs.append(t)
+                    if p.style and (p.style.name.startswith("Heading") or p.style.name == "Title"):
+                        headings.append({"style": p.style.name, "text": t})
+
                 tables_data = []
-                for t in doc.tables[:5]:
-                    table_rows = []
-                    for row in t.rows[:10]:
-                        table_rows.append([cell.text.strip() for cell in row.cells])
-                    tables_data.append(table_rows)
+                for t in doc.tables:
+                    t_rows = []
+                    for row in t.rows:
+                        t_rows.append([cell.text.strip() for cell in row.cells])
+                    if t_rows:
+                        hdr = t_rows[0]
+                        data_rows = t_rows[1:] if len(t_rows) > 1 else []
+                        tables_data.append({"headers": hdr, "rows": data_rows})
+
+                image_count = len(doc.inline_shapes) if hasattr(doc, "inline_shapes") else 0
+                all_text = " ".join(paragraphs)
+                word_count = len(all_text.split())
+
+                meta = {}
+                try:
+                    props = doc.core_properties
+                    meta = {
+                        "author": props.author or "",
+                        "title": props.title or "",
+                        "created": str(props.created) if props.created else "",
+                    }
+                except Exception:
+                    pass
 
                 return ToolResult(
                     success=True,
                     data={
                         "format": "docx",
                         "paragraph_count": len(paragraphs),
+                        "word_count": word_count,
+                        "heading_count": len(headings),
+                        "headings": headings[:15],
                         "table_count": len(doc.tables),
+                        "image_count": image_count,
+                        "tables": tables_data,
+                        "metadata": meta,
                         "content": "\n\n".join(paragraphs),
-                        "tables_preview": tables_data,
                     },
                 )
 
             elif ext in (".csv", ".tsv"):
-                delimiter = "\t" if ext == ".tsv" else ","
+                delimiter = arguments.get("delimiter")
                 rows = []
                 with open(doc_path, "r", encoding="utf-8", errors="ignore") as f:
+                    content_sample = f.read(2048)
+                    f.seek(0)
+                    if not delimiter:
+                        if ext == ".tsv":
+                            delimiter = "\t"
+                        else:
+                            try:
+                                dialect = csv.Sniffer().sniff(content_sample, delimiters=[",", "\t", ";", "|"])
+                                delimiter = dialect.delimiter
+                            except Exception:
+                                delimiter = ","
                     csv_reader = csv.reader(f, delimiter=delimiter)
                     for idx, row in enumerate(csv_reader):
                         if idx >= max_rows:
@@ -1462,6 +1530,7 @@ class DocumentReaderTool(BaseTool):
                     success=True,
                     data={
                         "format": "csv",
+                        "delimiter": delimiter,
                         "headers": header,
                         "preview_row_count": len(rows),
                         "rows": rows,
@@ -1492,6 +1561,9 @@ class DocumentGeneratorTool(BaseTool):
     description = "Generate a formatted document (.docx, .html, or .md) with title, structured sections, bullet points, and clean styling."
     risk_level = RiskLevel.L1
 
+    def __init__(self, policy: SecurityPolicy | None = None) -> None:
+        self.policy = policy or SecurityPolicy()
+
     def get_definition(self) -> ToolDefinition:
         return ToolDefinition(
             name=self.name,
@@ -1501,6 +1573,7 @@ class DocumentGeneratorTool(BaseTool):
                 "properties": {
                     "path": {"type": "string", "description": "Output file path (e.g. 'docs/architecture_report.docx' or 'report.html')."},
                     "title": {"type": "string", "description": "Document title."},
+                    "author": {"type": "string", "description": "Document author for metadata."},
                     "format": {"type": "string", "enum": ["docx", "html", "markdown"], "description": "Output format ('docx', 'html', 'markdown')."},
                     "sections": {
                         "type": "array",
@@ -1508,6 +1581,7 @@ class DocumentGeneratorTool(BaseTool):
                             "type": "object",
                             "properties": {
                                 "heading": {"type": "string"},
+                                "level": {"type": "integer", "description": "Heading level (1, 2, 3). Default is 1."},
                                 "body": {"type": "string"},
                                 "bullets": {"type": "array", "items": {"type": "string"}},
                             },
@@ -1524,7 +1598,16 @@ class DocumentGeneratorTool(BaseTool):
 
     async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
         base_dir = Path(context.get("working_directory", Path.cwd()))
-        out_path = (base_dir / arguments.get("path", "")).resolve()
+        raw_path = arguments.get("path", "")
+        if not raw_path:
+            return ToolResult(success=False, error="Path is required.")
+
+        p_str = str(raw_path).replace("$env:USERPROFILE", str(Path.home())).replace("~", str(Path.home()))
+        out_path = (base_dir / p_str).resolve() if not Path(p_str).is_absolute() else Path(p_str).resolve()
+
+        if not self.policy.is_path_safe(out_path, base_dir=base_dir):
+            return ToolResult(success=False, error=f"Access denied: path outside allowed boundary ({out_path})")
+
         title = arguments.get("title", "Document")
         doc_format = arguments.get("format", "markdown").lower()
         sections = arguments.get("sections", [])
@@ -1535,15 +1618,75 @@ class DocumentGeneratorTool(BaseTool):
         try:
             if doc_format == "docx":
                 doc = docx.Document()
+                doc.core_properties.title = title
+                if "author" in arguments:
+                    doc.core_properties.author = str(arguments["author"])
                 doc.add_heading(title, level=0)
 
                 if sections:
                     for sec in sections:
-                        doc.add_heading(sec.get("heading", ""), level=1)
+                        if sec.get("heading"):
+                            h_level = int(sec.get("level", 1))
+                            doc.add_heading(sec["heading"], level=h_level)
                         if sec.get("body"):
                             doc.add_paragraph(sec["body"])
                         for bullet in sec.get("bullets", []):
                             doc.add_paragraph(bullet, style="List Bullet")
+
+                        # Table support
+                        table_data = sec.get("table")
+                        if table_data and isinstance(table_data, dict):
+                            headers = table_data.get("headers", [])
+                            rows = table_data.get("rows", [])
+                            if headers or rows:
+                                cols = max(len(headers), max((len(r) for r in rows), default=0))
+                                total_rows = (1 if headers else 0) + len(rows)
+                                table = doc.add_table(rows=total_rows, cols=cols)
+                                table.style = "Table Grid"
+                                r_offset = 0
+                                if headers:
+                                    for c_idx, h_text in enumerate(headers):
+                                        c_cell = table.rows[0].cells[c_idx]
+                                        c_cell.text = str(h_text)
+                                        for p in c_cell.paragraphs:
+                                            for r in p.runs:
+                                                r.font.bold = True
+                                    r_offset = 1
+                                for r_idx, r_vals in enumerate(rows):
+                                    row_cells = table.rows[r_offset + r_idx].cells
+                                    for c_idx, val in enumerate(r_vals):
+                                        if c_idx < cols:
+                                            row_cells[c_idx].text = str(val)
+
+                        # Image support
+                        img_rel = sec.get("image_path") or sec.get("image")
+                        if img_rel:
+                            img_path = (base_dir / img_rel).resolve() if not Path(img_rel).is_absolute() else Path(img_rel).resolve()
+                            if img_path.exists():
+                                w_inch = float(sec.get("width_inches", 5.0))
+                                doc.add_picture(str(img_path), width=Inches(w_inch))
+                                if sec.get("caption"):
+                                    cap = doc.add_paragraph(sec["caption"])
+                                    cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                                    for r in cap.runs:
+                                        r.font.italic = True
+                                        r.font.size = Pt(9.5)
+                                        r.font.color.rgb = RGBColor(100, 116, 139)
+
+                        # Code block support
+                        if sec.get("code"):
+                            code_p = doc.add_paragraph()
+                            code_run = code_p.add_run(sec["code"])
+                            code_run.font.name = "Consolas"
+                            code_run.font.size = Pt(9.5)
+
+                        # Callout support
+                        if sec.get("callout"):
+                            call_p = doc.add_paragraph()
+                            r = call_p.add_run(f"NOTE: {sec['callout']}")
+                            r.font.italic = True
+                            r.font.color.rgb = RGBColor(30, 58, 138)
+
                 elif raw_content:
                     for line in raw_content.splitlines():
                         if line.startswith("# "):
@@ -1558,26 +1701,70 @@ class DocumentGeneratorTool(BaseTool):
                 doc.save(str(out_path))
 
             elif doc_format == "html":
-                body_parts = [f"<h1>{title}</h1>"]
+                body_parts = [f"<h1>{html.escape(title)}</h1>"]
                 if sections:
                     for sec in sections:
-                        body_parts.append(f"<h2>{sec.get('heading', '')}</h2>")
+                        if sec.get("heading"):
+                            body_parts.append(f"<h2>{html.escape(sec['heading'])}</h2>")
                         if sec.get("body"):
-                            body_parts.append(f"<p>{sec['body']}</p>")
+                            body_parts.append(f"<p>{html.escape(sec['body'])}</p>")
                         if sec.get("bullets"):
                             body_parts.append("<ul>")
                             for b in sec["bullets"]:
-                                body_parts.append(f"<li>{b}</li>")
+                                body_parts.append(f"<li>{html.escape(b)}</li>")
                             body_parts.append("</ul>")
+
+                        # Table
+                        t_data = sec.get("table")
+                        if t_data and isinstance(t_data, dict):
+                            hdrs = t_data.get("headers", [])
+                            t_rows = t_data.get("rows", [])
+                            if hdrs or t_rows:
+                                body_parts.append("<table style='width: 100%; border-collapse: collapse; margin: 16px 0; border: 1px solid #e2e8f0;'>")
+                                if hdrs:
+                                    body_parts.append("<thead><tr style='background: #f8fafc; border-bottom: 2px solid #cbd5e1;'>")
+                                    for h in hdrs:
+                                        body_parts.append(f"<th style='padding: 10px 14px; text-align: left; font-weight: 600; font-size: 14px;'>{html.escape(str(h))}</th>")
+                                    body_parts.append("</tr></thead>")
+                                body_parts.append("<tbody>")
+                                for r_idx, r in enumerate(t_rows):
+                                    bg = "#ffffff" if r_idx % 2 == 0 else "#f8fafc"
+                                    body_parts.append(f"<tr style='background: {bg}; border-bottom: 1px solid #e2e8f0;'>")
+                                    for cell in r:
+                                        body_parts.append(f"<td style='padding: 8px 14px; font-size: 14px;'>{html.escape(str(cell))}</td>")
+                                    body_parts.append("</tr>")
+                                body_parts.append("</tbody></table>")
+
+                        # Image
+                        img_rel = sec.get("image_path") or sec.get("image")
+                        if img_rel:
+                            img_path = (base_dir / img_rel).resolve() if not Path(img_rel).is_absolute() else Path(img_rel).resolve()
+                            if img_path.exists():
+                                cap_str = html.escape(sec.get("caption", ""))
+                                body_parts.append(
+                                    f"<figure style='margin: 20px 0; text-align: center;'>"
+                                    f"<img src='{img_path.as_posix()}' style='max-width: 100%; border-radius: 6px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);' />"
+                                    f"<figcaption style='font-size: 13px; color: #64748b; margin-top: 6px;'>{cap_str}</figcaption>"
+                                    f"</figure>"
+                                )
+
+                        # Code
+                        if sec.get("code"):
+                            body_parts.append(f"<pre style='background: #0f172a; color: #f8fafc; padding: 14px; border-radius: 6px; overflow-x: auto;'><code>{html.escape(sec['code'])}</code></pre>")
+
+                        # Callout
+                        if sec.get("callout"):
+                            body_parts.append(f"<div style='border-left: 4px solid #3b82f6; background: #eff6ff; padding: 12px 16px; border-radius: 4px; margin: 16px 0; color: #1e40af;'><strong>Note:</strong> {html.escape(sec['callout'])}</div>")
+
                 elif raw_content:
-                    body_parts.append(f"<pre style='white-space: pre-wrap;'>{raw_content}</pre>")
+                    body_parts.append(f"<pre style='white-space: pre-wrap;'>{html.escape(raw_content)}</pre>")
 
                 html_doc = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title}</title>
+<title>{html.escape(title)}</title>
 <style>
 body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; max-width: 860px; margin: 40px auto; padding: 0 20px; color: #1e293b; background: #ffffff; }}
 h1 {{ color: #0f172a; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 24px; }}
@@ -1598,11 +1785,29 @@ pre {{ background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; paddi
                 md_lines = [f"# {title}\n"]
                 if sections:
                     for sec in sections:
-                        md_lines.append(f"## {sec.get('heading', '')}\n")
+                        if sec.get("heading"):
+                            md_lines.append(f"## {sec['heading']}\n")
                         if sec.get("body"):
                             md_lines.append(f"{sec['body']}\n")
                         for b in sec.get("bullets", []):
                             md_lines.append(f"- {b}")
+                        if sec.get("table") and isinstance(sec["table"], dict):
+                            hdrs = sec["table"].get("headers", [])
+                            rws = sec["table"].get("rows", [])
+                            if hdrs:
+                                md_lines.append("| " + " | ".join(str(h) for h in hdrs) + " |")
+                                md_lines.append("| " + " | ".join("---" for _ in hdrs) + " |")
+                            for r in rws:
+                                md_lines.append("| " + " | ".join(str(c) for c in r) + " |")
+                            md_lines.append("")
+                        img_rel = sec.get("image_path") or sec.get("image")
+                        if img_rel:
+                            caption = sec.get("caption", "image")
+                            md_lines.append(f"![{caption}]({img_rel})\n")
+                        if sec.get("code"):
+                            md_lines.append(f"```\n{sec['code']}\n```\n")
+                        if sec.get("callout"):
+                            md_lines.append(f"> **Note:** {sec['callout']}\n")
                         md_lines.append("")
                 elif raw_content:
                     md_lines.append(raw_content)
@@ -1628,6 +1833,9 @@ class PresentationGeneratorTool(BaseTool):
     name = "generate_presentation"
     description = "Generate an interactive, standalone HTML presentation with keyboard arrow navigation, fullscreen support, and professional dark/light styling."
     risk_level = RiskLevel.L1
+
+    def __init__(self, policy: SecurityPolicy | None = None) -> None:
+        self.policy = policy or SecurityPolicy()
 
     def get_definition(self) -> ToolDefinition:
         return ToolDefinition(
@@ -1662,7 +1870,13 @@ class PresentationGeneratorTool(BaseTool):
 
     async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
         base_dir = Path(context.get("working_directory", Path.cwd()))
-        out_path = (base_dir / arguments.get("path", "presentation.html")).resolve()
+        raw_path = arguments.get("path", "presentation.html")
+        p_str = str(raw_path).replace("$env:USERPROFILE", str(Path.home())).replace("~", str(Path.home()))
+        out_path = (base_dir / p_str).resolve() if not Path(p_str).is_absolute() else Path(p_str).resolve()
+
+        if not self.policy.is_path_safe(out_path, base_dir=base_dir):
+            return ToolResult(success=False, error=f"Access denied: path outside allowed boundary ({out_path})")
+
         title = arguments.get("title", "Presentation")
         subtitle = arguments.get("subtitle", "")
         theme = arguments.get("theme", "dark")
