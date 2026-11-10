@@ -2,9 +2,10 @@
 
 # 1. Standard library imports
 import asyncio
+import json
 from pathlib import Path
 import tempfile
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # 2. Third-party imports
 import pytest
@@ -15,6 +16,7 @@ from nemo.agent.verifier import OutcomeVerifier, VerificationResult
 from nemo.ai.schemas import LLMResponse
 from nemo.common.types import ToolResult
 from nemo.intelligence.packages import PackageManagerDetector
+from nemo.tools.builtin import GitDiffTool, OpenBrowserTool, ProjectEnvironmentTool
 from nemo.tools.registry import ToolRegistry
 
 # 4. Types, Protocols, Schemas
@@ -186,6 +188,54 @@ def test_package_manager_detector_current_project():
     py_eco = next(e for e in ecosystems if e.ecosystem == "python")
     assert py_eco.manifest_file == "pyproject.toml"
     assert "pytest" in py_eco.validate_command
+    assert py_eco.installed is True
+
+
+@pytest.mark.asyncio
+async def test_project_environment_tool_nodejs_scaffold():
+    """Verify smart environment tool detects uninstalled Node packages, dev command, and port."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        root = Path(tmpdir)
+        pkg_json = {
+            "name": "sample-react-vite",
+            "scripts": {"dev": "vite", "build": "tsc -b && vite build"},
+            "dependencies": {"react": "^18.3.1", "react-dom": "^18.3.1"},
+            "devDependencies": {"vite": "^5.4.0", "typescript": "^5.5.0"},
+        }
+        (root / "package.json").write_text(json.dumps(pkg_json, indent=2), encoding="utf-8")
+
+        tool = ProjectEnvironmentTool()
+        result = await tool.execute({}, context={"working_directory": str(root)})
+        assert result.success
+        ecos = result.data["ecosystems"]
+        assert len(ecos) == 1
+        node_eco = ecos[0]
+        assert node_eco["ecosystem"] == "nodejs"
+        assert node_eco["installed"] is False  # node_modules not created yet
+        assert node_eco["install_command"] == "npm install"
+        assert node_eco["dev_command"] == "npm run dev"
+        assert node_eco["default_url"] == "http://localhost:5173"
+
+
+@pytest.mark.asyncio
+async def test_open_browser_tool():
+    """Verify OpenBrowserTool dispatches URL to webbrowser."""
+    tool = OpenBrowserTool()
+    with patch("webbrowser.open", return_value=True) as mock_open:
+        res = await tool.execute({"url": "http://localhost:5173"}, context={})
+        assert res.success
+        assert res.data["url"] == "http://localhost:5173"
+        mock_open.assert_called_once_with("http://localhost:5173")
+
+
+@pytest.mark.asyncio
+async def test_git_diff_tool():
+    """Verify GitDiffTool runs without errors in git workspace."""
+    tool = GitDiffTool()
+    res = await tool.execute({}, context={"working_directory": str(Path.cwd())})
+    assert res.success
+    assert "diff" in res.data
+    assert "status" in res.data
 
 
 # 6. Public exports
@@ -195,4 +245,7 @@ __all__ = [
     "test_verification_gate_blocks_invalid_syntax",
     "test_verification_gate_enforced_by_orchestrator",
     "test_package_manager_detector_current_project",
+    "test_project_environment_tool_nodejs_scaffold",
+    "test_open_browser_tool",
+    "test_git_diff_tool",
 ]

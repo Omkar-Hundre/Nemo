@@ -31,6 +31,7 @@ class MemoryRepository:
         predicate: str | None = None,
         obj: str | None = None,
         importance: float = 1.0,
+        metadata: dict | None = None,
     ) -> MemoryItem:
         """Persist a new memory fact or decision."""
         item = MemoryItem(
@@ -43,12 +44,82 @@ class MemoryRepository:
             object=obj,
             importance=importance,
             status="active",
+            metadata_=metadata or {},
         )
         async with self.session_provider() as session:
             session.add(item)
             await session.commit()
             await session.refresh(item)
             return item
+
+    async def get_memory(self, memory_id: str) -> MemoryItem | None:
+        """Retrieve memory item by ID."""
+        async with self.session_provider() as session:
+            stmt = select(MemoryItem).where(MemoryItem.id == memory_id)
+            result = await session.execute(stmt)
+            return result.scalar_one_or_none()
+
+    async def update_memory(
+        self,
+        memory_id: str,
+        content: str | None = None,
+        importance: float | None = None,
+        status: str | None = None,
+        metadata: dict | None = None,
+    ) -> MemoryItem | None:
+        """Update fields of an existing memory item."""
+        async with self.session_provider() as session:
+            stmt = select(MemoryItem).where(MemoryItem.id == memory_id)
+            result = await session.execute(stmt)
+            item = result.scalar_one_or_none()
+            if not item:
+                return None
+            if content is not None:
+                item.content = content
+            if importance is not None:
+                item.importance = importance
+            if status is not None:
+                item.status = status
+            if metadata is not None:
+                item.metadata_ = metadata
+            await session.commit()
+            await session.refresh(item)
+            return item
+
+    async def supersede_memory(
+        self,
+        old_memory_id: str,
+        new_content: str,
+        importance: float = 1.0,
+        subject: str | None = None,
+        predicate: str | None = None,
+        obj: str | None = None,
+    ) -> MemoryItem | None:
+        """Atomically mark old memory as superseded and insert replacement memory."""
+        async with self.session_provider() as session:
+            stmt = select(MemoryItem).where(MemoryItem.id == old_memory_id)
+            result = await session.execute(stmt)
+            old_item = result.scalar_one_or_none()
+            if not old_item:
+                return None
+            old_item.status = "superseded"
+
+            new_item = MemoryItem(
+                content=new_content,
+                scope=old_item.scope,
+                project_id=old_item.project_id,
+                type=old_item.type,
+                subject=subject or old_item.subject,
+                predicate=predicate or old_item.predicate,
+                object=obj or old_item.object,
+                importance=importance,
+                status="active",
+                metadata_={"supersedes": old_memory_id},
+            )
+            session.add(new_item)
+            await session.commit()
+            await session.refresh(new_item)
+            return new_item
 
     async def search_memories(
         self,
@@ -156,6 +227,25 @@ class ProjectRepository:
             stmt = select(Project).where(Project.root_path == canonical_path)
             res = await session.execute(stmt)
             return res.scalar_one_or_none()
+
+    async def get_by_id(self, project_id: str) -> Project | None:
+        """Find project by unique ID."""
+        async with self.session_provider() as session:
+            stmt = select(Project).where(Project.id == project_id)
+            res = await session.execute(stmt)
+            return res.scalar_one_or_none()
+
+    async def delete_project(self, project_id: str) -> bool:
+        """Remove project and cascade its records without deleting directory."""
+        async with self.session_provider() as session:
+            stmt = select(Project).where(Project.id == project_id)
+            res = await session.execute(stmt)
+            proj = res.scalar_one_or_none()
+            if not proj:
+                return False
+            await session.delete(proj)
+            await session.commit()
+            return True
 
 # 6. Public exports
 __all__ = ["MemoryRepository", "ProjectRepository"]

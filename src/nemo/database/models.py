@@ -70,6 +70,7 @@ class MemoryItem(Base):
     importance: Mapped[float] = mapped_column(Float, default=1.0)
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
     status: Mapped[str] = mapped_column(String(50), default="active", index=True)  # "active" | "superseded" | "archived"
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

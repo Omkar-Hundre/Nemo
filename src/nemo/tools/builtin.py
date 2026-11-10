@@ -4,6 +4,7 @@
 import asyncio
 from pathlib import Path
 from typing import Any
+import webbrowser
 
 # 2. Third-party imports
 # (None)
@@ -15,6 +16,7 @@ from nemo.execution.shells.native import NativeSubprocessExecutor
 from nemo.integrations.ide.registry import IDERegistry
 from nemo.intelligence.chunks import StructureAwareChunker
 from nemo.intelligence.indexer import ProjectIndexer
+from nemo.intelligence.packages import PackageManagerDetector
 from nemo.intelligence.parser import ASTCodeParser
 from nemo.memory.repository import MemoryRepository
 from nemo.security.policy import SecurityPolicy
@@ -429,6 +431,98 @@ class IDEOpenTool(BaseTool):
 
         return ToolResult(success=ok, data={"path": str(target), "opened": ok})
 
+
+class OpenBrowserTool(BaseTool):
+    """Opens a URL or local dev server address in default system browser."""
+    name = "open_browser"
+    description = "Open a local URL (e.g. http://localhost:5173 or http://localhost:3000) in default web browser."
+    risk_level = RiskLevel.L0
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to open in web browser (default 'http://localhost:3000')."},
+                },
+                "required": ["url"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        url = arguments.get("url", "http://localhost:3000")
+        try:
+            opened = webbrowser.open(url)
+            return ToolResult(success=True, data={"url": url, "opened": opened})
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Browser open error: {exc}")
+
+
+class ProjectEnvironmentTool(BaseTool):
+    """Inspects workspace manifests, installed packages status, dev commands, and default ports."""
+    name = "inspect_project_environment"
+    description = "Inspect detected project ecosystems, manifests, whether dependencies are installed, dev commands, and default URLs."
+    risk_level = RiskLevel.L0
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Workspace directory path (default '.')."},
+                },
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        target = (base_dir / arguments.get("path", ".")).resolve()
+        ecosystems = PackageManagerDetector.detect(target)
+        eco_dicts = [e.model_dump() for e in ecosystems]
+        return ToolResult(success=True, data={"workspace": str(target), "ecosystems": eco_dicts})
+
+
+class GitDiffTool(BaseTool):
+    """Inspects uncommitted changes and modified files relative to git HEAD."""
+    name = "git_diff"
+    description = "Inspect uncommitted code changes and modified files relative to HEAD or Git status."
+    risk_level = RiskLevel.L0
+
+    def __init__(self, executor: NativeSubprocessExecutor | None = None) -> None:
+        self.executor = executor or NativeSubprocessExecutor()
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "staged": {"type": "boolean", "description": "Whether to inspect staged changes only (default false)."},
+                },
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        staged_flag = "--staged" if arguments.get("staged") else ""
+        res_diff = await self.executor.execute(f"git diff {staged_flag}", cwd=base_dir)
+        res_status = await self.executor.execute("git status -s", cwd=base_dir)
+        return ToolResult(
+            success=True,
+            data={
+                "diff": res_diff.stdout[:4000],
+                "status": res_status.stdout[:1000],
+            },
+        )
+
 # 6. Public exports
 __all__ = [
     "CodebaseSummaryTool",
@@ -441,4 +535,7 @@ __all__ = [
     "ListDirectoryTool",
     "MemoryRecallTool",
     "IDEOpenTool",
+    "OpenBrowserTool",
+    "ProjectEnvironmentTool",
+    "GitDiffTool",
 ]

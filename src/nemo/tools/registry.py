@@ -13,9 +13,12 @@ from nemo.tools.base import BaseTool, ToolDefinition
 from nemo.tools.builtin import (
     CodebaseSummaryTool,
     CodeSearchTool,
+    GitDiffTool,
     IDEOpenTool,
     ListDirectoryTool,
     MemoryRecallTool,
+    OpenBrowserTool,
+    ProjectEnvironmentTool,
     ReadFileTool,
     SemanticSearchTool,
     SymbolLookupTool,
@@ -48,8 +51,11 @@ class ToolRegistry:
         self.register(ReadFileTool())
         self.register(WriteFileTool(policy=self.policy))
         self.register(ListDirectoryTool())
+        self.register(GitDiffTool())
+        self.register(OpenBrowserTool())
 
-        # 3. Memory & IDE integration
+        # 3. Environment, Memory & IDE integration
+        self.register(ProjectEnvironmentTool())
         self.register(MemoryRecallTool())
         self.register(IDEOpenTool())
 
