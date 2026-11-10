@@ -99,3 +99,4 @@ class NativeSubprocessExecutor(ShellExecutor):
 
 # 6. Public exports
 __all__ = ["NativeSubprocessExecutor", "resolve_shell_executable"]
+

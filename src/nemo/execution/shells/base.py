@@ -28,3 +28,4 @@ class ShellExecutor(Protocol):
 
 # 6. Public exports
 __all__ = ["ShellExecutor"]
+

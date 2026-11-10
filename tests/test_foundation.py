@@ -52,3 +52,4 @@ if __name__ == "__main__":
 
 # 6. Public exports
 __all__ = ["test_settings_load", "test_shell_resolution", "test_native_subprocess_execution"]
+

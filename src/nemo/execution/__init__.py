@@ -7,6 +7,7 @@
 # (None)
 
 # 3. Local / internal imports
+from nemo.execution.sessions import SessionInfo, SessionManager, SessionStatus
 from nemo.execution.shells import NativeSubprocessExecutor, ShellExecutor
 
 # 4. Types, Protocols, Schemas
@@ -16,4 +17,10 @@ from nemo.execution.shells import NativeSubprocessExecutor, ShellExecutor
 # (None)
 
 # 6. Public exports
-__all__ = ["NativeSubprocessExecutor", "ShellExecutor"]
+__all__ = [
+    "NativeSubprocessExecutor",
+    "ShellExecutor",
+    "SessionInfo",
+    "SessionManager",
+    "SessionStatus",
+]

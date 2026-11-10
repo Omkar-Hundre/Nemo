@@ -18,3 +18,4 @@ from nemo.execution.shells.native import NativeSubprocessExecutor, resolve_shell
 
 # 6. Public exports
 __all__ = ["ShellExecutor", "NativeSubprocessExecutor", "resolve_shell_executable"]
+
