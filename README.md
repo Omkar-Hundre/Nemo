@@ -2,6 +2,8 @@
 
 NEMO is a persistent, project-aware developer operating environment designed specifically for Windows. Powered by **NVIDIA NIM** (Nemotron 3.5 Super VL 120B & Nemotron 3.5 Embed 1B), NEMO acts as an autonomous operating, inspection, and coordination layer — managing dev servers, checking ports, scaffolding tech stacks, reading and generating docs, and verifying outcomes with ground-truth rigor.
 
+> 🗺️ **Looking for upcoming features?** Check out the [Feature Roadmap & Architecture Blueprint](file:///d:/Nemo/ROADMAP.md) detailing Voice Control (`edge-tts`), Windows GUI Automation (`pywinauto`), Git Sync, Database Explorer, API Tester, and Desktop Integration.
+
 ---
 
 ## ⚡ Direct Prompt Execution (No `nemo task` Needed!)
