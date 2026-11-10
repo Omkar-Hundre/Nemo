@@ -370,6 +370,46 @@ class ConversationRepository:
             await session.commit()
             return True
 
+    async def fork_conversation(
+        self,
+        conversation_id: str,
+        new_title: str | None = None,
+    ) -> Conversation | None:
+        """Fork an existing conversation into a new independent session with copied history."""
+        orig = await self.get_conversation(conversation_id)
+        if not orig:
+            return None
+        title = new_title or f"{orig.title} (Fork)"
+        forked = await self.create_conversation(title=title, project_id=orig.project_id)
+        messages = await self.get_messages(conversation_id, limit=200)
+        for m in messages:
+            await self.add_message(forked.id, m.role, m.content)
+        return await self.get_conversation(forked.id)
+
+    async def export_transcript(self, conversation_id: str) -> str:
+        """Generate a formatted markdown transcript of a conversation."""
+        conv = await self.get_conversation(conversation_id)
+        if not conv:
+            return ""
+        messages = await self.get_messages(conversation_id, limit=500)
+        started = conv.created_at.strftime("%Y-%m-%d %H:%M:%S") if conv.created_at else "Unknown"
+        lines = [
+            f"# NEMO Task Session: {conv.title}",
+            f"- **Session ID:** `{conv.id}`",
+            f"- **Started:** {started}",
+            f"- **Total Messages:** {len(messages)}",
+            "",
+            "---",
+            "",
+        ]
+        for m in messages:
+            role_header = "### 👤 Developer" if m.role == "user" else "### 🤖 NEMO Agent"
+            time_str = m.created_at.strftime("%H:%M:%S") if m.created_at else ""
+            lines.append(f"{role_header} ({time_str})\n")
+            lines.append(f"{m.content.strip()}\n")
+            lines.append("---\n")
+        return "\n".join(lines)
+
 
 class TaskRepository:
     """Audit and tracking of background/autonomous agent task executions."""

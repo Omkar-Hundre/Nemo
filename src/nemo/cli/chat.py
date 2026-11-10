@@ -2,11 +2,14 @@
 
 # 1. Standard library imports
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
+import re
 import sys
 
 # 2. Third-party imports
 from rich.console import Console
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
@@ -18,6 +21,7 @@ from nemo.ai.providers.nvidia import NvidiaNimProvider
 from nemo.ai.schemas import ChatMessage
 from nemo.config.settings import get_settings
 from nemo.database.connection import init_db
+from nemo.database.models import Conversation
 from nemo.execution.shells.native import NativeSubprocessExecutor
 from nemo.intelligence.indexer import ProjectIndexer
 from nemo.memory.repository import ConversationRepository, MemoryRepository, ProjectRepository
@@ -51,6 +55,124 @@ def is_action_intent(text: str) -> bool:
     return any(t.startswith(prefix) for prefix in ACTION_INTENT_PREFIXES)
 
 
+def format_relative_time(dt: datetime | None) -> str:
+    """Format datetime into human-friendly relative duration (e.g. '5m ago', '2h ago')."""
+    if not dt:
+        return "recently"
+    now = datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    diff = now - dt
+    total_seconds = max(0, int(diff.total_seconds()))
+    if total_seconds < 60:
+        return "just now"
+    if total_seconds < 3600:
+        return f"{total_seconds // 60}m ago"
+    if total_seconds < 86400:
+        return f"{total_seconds // 3600}h ago"
+    return f"{total_seconds // 86400}d ago"
+
+
+def interactive_session_picker(
+    conversations: list[Conversation],
+    active_id: str | None = None,
+) -> str | None:
+    """Interactive Up/Down arrow key menu to select, resume, or start a session.
+
+    Returns:
+        - conversation_id string if a session was picked
+        - "NEW" if user selected fresh session
+        - None if user cancelled (Esc or q)
+    """
+    if not conversations:
+        return None
+
+    if not sys.stdin.isatty():
+        return None
+
+    try:
+        import msvcrt
+    except ImportError:
+        return None
+
+    items = []
+    for c in conversations:
+        rel_time = format_relative_time(c.created_at)
+        msg_count = len(c.messages) if c.messages else 0
+        is_active = (c.id == active_id)
+        items.append((c.id, c.title, rel_time, msg_count, is_active))
+
+    items.append(("NEW", "+ Start a New Clean Session", "", 0, active_id is None))
+
+    current_idx = 0
+    for i, item in enumerate(items):
+        if item[4]:
+            current_idx = i
+            break
+
+    total = len(items)
+
+    def render_menu(idx: int):
+        tbl = Table(
+            title="[bold cyan]NEMO Session Selector[/bold cyan] [dim](↑/↓ navigate, Enter select, 1-9 jump, Esc cancel)[/dim]",
+            border_style="cyan",
+            show_header=True,
+            header_style="bold cyan",
+        )
+        tbl.add_column("#", width=5, justify="right")
+        tbl.add_column("Status", width=10, justify="center")
+        tbl.add_column("Session Title / Objective", style="white")
+        tbl.add_column("Activity", style="dim", width=12)
+        tbl.add_column("Messages", justify="right", width=10)
+
+        for i, (cid, title, rel_time, msg_count, is_act) in enumerate(items):
+            act_badge = "[green]● ACTIVE[/green]" if is_act else "[dim]○[/dim]"
+            msg_str = f"{msg_count} msgs" if cid != "NEW" else "-"
+
+            if i == idx:
+                tbl.add_row(
+                    f"[bold yellow]❯ {i+1}[/bold yellow]",
+                    f"[bold yellow]{act_badge}[/bold yellow]",
+                    f"[bold yellow]{title}[/bold yellow]",
+                    f"[bold yellow]{rel_time}[/bold yellow]",
+                    f"[bold yellow]{msg_str}[/bold yellow]",
+                    style="on grey23",
+                )
+            else:
+                tbl.add_row(
+                    f"  {i+1}",
+                    act_badge,
+                    title,
+                    rel_time,
+                    msg_str,
+                )
+        return tbl
+
+    try:
+        with Live(render_menu(current_idx), console=console, auto_refresh=False, transient=True) as live:
+            while True:
+                ch = msvcrt.getch()
+                if ch in (b'\x00', b'\xe0'):
+                    arrow = msvcrt.getch()
+                    if arrow == b'H':  # Up arrow
+                        current_idx = (current_idx - 1) % total
+                        live.update(render_menu(current_idx), refresh=True)
+                    elif arrow == b'P':  # Down arrow
+                        current_idx = (current_idx + 1) % total
+                        live.update(render_menu(current_idx), refresh=True)
+                elif ch in (b'\r', b'\n'):  # Enter
+                    return items[current_idx][0]
+                elif ch in (b'\x1b', b'q', b'Q'):  # Esc or q
+                    return None
+                elif ch.isdigit():
+                    d = int(ch.decode("ascii"))
+                    if 1 <= d <= total:
+                        current_idx = d - 1
+                        live.update(render_menu(current_idx), refresh=True)
+    except Exception:
+        return None
+
+
 async def run_interactive_chat(initial_conversation_id: str | None = None) -> None:
     """Launch persistent interactive developer operating session."""
     await init_db()
@@ -76,14 +198,14 @@ async def run_interactive_chat(initial_conversation_id: str | None = None) -> No
         f"[bold]IDE Adapter:[/bold]     {settings.default_ide}\n"
         f"[bold]Memory System:[/bold]   Synchronized\n"
         f"[bold]Code Index:[/bold]      {indexed_files} files up to date\n\n"
-        f"[dim]Commands: 'history' (view previous tasks), 'resume <id>' (restore context), 'new' (fresh session), 'exit' to quit.[/dim]"
+        f"[dim]Usability: 'resume' (↑/↓ arrow menu or 'resume 2'), 'history', 'rename', 'fork', 'export', 'new'[/dim]"
     )
     console.print(Panel(banner, title=f"[bold]NEMO v{__version__} — Developer Runtime[/bold]", border_style="cyan"))
 
     if active_conversation_id:
         conv = await conv_repo.get_conversation(active_conversation_id)
         if conv:
-            console.print(f"[bold green]Resumed Session {conv.id[:8]}:[/bold green] [cyan]{conv.title}[/cyan]")
+            console.print(f"[bold green]Resumed Session:[/bold green] [cyan]{conv.title}[/cyan] [dim]({conv.id[:8]})[/dim]")
             recent_msgs = await conv_repo.get_messages(conv.id, limit=4)
             for m in recent_msgs:
                 console.print(f" [dim]{m.role.capitalize()}: {m.content[:75]}...[/dim]")
@@ -107,7 +229,20 @@ async def run_interactive_chat(initial_conversation_id: str | None = None) -> No
 
     while True:
         try:
-            prompt_label = f"nemo [{active_conversation_id[:6]}]> " if active_conversation_id else "nemo> "
+            # Dynamic prompt showing active task title instead of cryptic UUID
+            active_label = ""
+            if active_conversation_id:
+                all_convs = await conv_repo.list_conversations(limit=50)
+                matched = [c for c in all_convs if c.id == active_conversation_id]
+                if matched:
+                    c_title = matched[0].title
+                    snippet = (c_title[:16] + "..") if len(c_title) > 18 else c_title
+                    active_label = f" [{snippet}]"
+                else:
+                    active_label = f" [{active_conversation_id[:6]}]"
+
+            prompt_label = f"nemo{active_label}> "
+
             if prompt_session is not None and sys.stdin.isatty():
                 user_input = (await prompt_session.prompt_async(prompt_label)).strip()
             else:
@@ -123,47 +258,170 @@ async def run_interactive_chat(initial_conversation_id: str | None = None) -> No
             console.print("[dim]Goodbye.[/dim]")
             break
 
-        # Session history inspection
-        if user_input.lower() in ("history", "sessions", "tasks"):
-            convs = await conv_repo.list_conversations(limit=15)
-            if not convs:
-                console.print("[dim]No prior conversation sessions found in database.[/dim]")
-            else:
-                tbl = Table(title="Conversation & Task History", border_style="cyan")
-                tbl.add_column("Session ID", style="bold cyan", width=12)
-                tbl.add_column("Status", width=10)
-                tbl.add_column("Title / Objective", style="white")
-                tbl.add_column("Started", style="dim", width=18)
-                tbl.add_column("Messages", justify="right", width=10)
-                for c in convs:
-                    is_active = "[green]● ACTIVE[/green]" if c.id == active_conversation_id else "[dim]○[/dim]"
-                    started = c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "-"
-                    msg_count = str(len(c.messages)) if c.messages else "0"
-                    tbl.add_row(c.id[:8], is_active, c.title, started, msg_count)
-                console.print(tbl)
-                console.print("[dim]Use 'resume <id>' to switch context, or 'new' for a fresh session.[/dim]\n")
-            continue
-
-        # Resume specific conversation session
-        if user_input.lower().startswith("resume "):
-            target_id = user_input[7:].strip()
+        # 1. Resume command: interactive arrow-key selector or direct lookup (number, keyword, ID)
+        if user_input.lower() == "resume" or user_input.lower().startswith("resume "):
+            arg = user_input[6:].strip() if len(user_input) > 6 else ""
             all_convs = await conv_repo.list_conversations(limit=50)
-            matched = [c for c in all_convs if c.id.startswith(target_id)]
-            if matched:
-                selected = matched[0]
-                active_conversation_id = selected.id
-                console.print(f"[bold green]Resumed Session {selected.id[:8]}:[/bold green] [cyan]{selected.title}[/cyan]")
-                msgs = await conv_repo.get_messages(selected.id, limit=4)
+
+            if not all_convs and not arg:
+                console.print("[dim]No previous sessions found in database.[/dim]\n")
+                continue
+
+            selected_conv = None
+            if not arg:
+                # Up/Down Arrow Interactive Selector
+                picked_id = interactive_session_picker(all_convs, active_conversation_id)
+                if picked_id == "NEW":
+                    active_conversation_id = None
+                    console.print("[cyan]Started fresh conversation session with clean context.[/cyan]\n")
+                    continue
+                elif picked_id:
+                    matched = [c for c in all_convs if c.id == picked_id]
+                    if matched:
+                        selected_conv = matched[0]
+                else:
+                    # User cancelled with Esc
+                    continue
+            else:
+                # Human-friendly: 1-based number (e.g. 'resume 2')
+                if arg.isdigit():
+                    num = int(arg)
+                    if 1 <= num <= len(all_convs):
+                        selected_conv = all_convs[num - 1]
+                    else:
+                        console.print(f"[red]Invalid session number #{num}. Available: 1 to {len(all_convs)}[/red]\n")
+                        continue
+                else:
+                    # Title keyword search (e.g. 'resume refactor')
+                    title_matches = [c for c in all_convs if arg.lower() in c.title.lower()]
+                    if title_matches:
+                        selected_conv = title_matches[0]
+                    else:
+                        # UUID prefix match
+                        id_matches = [c for c in all_convs if c.id.startswith(arg)]
+                        if id_matches:
+                            selected_conv = id_matches[0]
+
+            if selected_conv:
+                active_conversation_id = selected_conv.id
+                console.print(f"[bold green]Resumed Session:[/bold green] [cyan]{selected_conv.title}[/cyan] [dim]({selected_conv.id[:8]})[/dim]")
+                msgs = await conv_repo.get_messages(selected_conv.id, limit=3)
                 if msgs:
-                    console.print("[dim]Recent messages in this session:[/dim]")
+                    console.print("[dim]Recent context:[/dim]")
                     for m in msgs:
                         console.print(f" [dim]{m.role.capitalize()}: {m.content[:75]}...[/dim]")
                 console.print()
             else:
-                console.print(f"[red]No conversation found matching '{target_id}'[/red]")
+                console.print(f"[red]No conversation found matching '{arg}'[/red]\n")
             continue
 
-        # Start fresh new session
+        # 2. History & Sessions inspection: interactive arrow menu or styled table
+        if user_input.lower() in ("history", "sessions", "tasks"):
+            all_convs = await conv_repo.list_conversations(limit=25)
+            if not all_convs:
+                console.print("[dim]No previous sessions found in database.[/dim]\n")
+                continue
+
+            picked_id = interactive_session_picker(all_convs, active_conversation_id)
+            if picked_id == "NEW":
+                active_conversation_id = None
+                console.print("[cyan]Started fresh conversation session with clean context.[/cyan]\n")
+                continue
+            elif picked_id:
+                matched = [c for c in all_convs if c.id == picked_id]
+                if matched:
+                    active_conversation_id = matched[0].id
+                    console.print(f"[bold green]Switched to Session:[/bold green] [cyan]{matched[0].title}[/cyan] [dim]({matched[0].id[:8]})[/dim]")
+                    msgs = await conv_repo.get_messages(matched[0].id, limit=3)
+                    if msgs:
+                        console.print("[dim]Recent context:[/dim]")
+                        for m in msgs:
+                            console.print(f" [dim]{m.role.capitalize()}: {m.content[:75]}...[/dim]")
+                    console.print()
+                continue
+            else:
+                # If cancelled with Esc, render overview table
+                tbl = Table(title="Conversation & Task History", border_style="cyan")
+                tbl.add_column("#", width=4, justify="right")
+                tbl.add_column("Status", width=10, justify="center")
+                tbl.add_column("Title / Objective", style="white")
+                tbl.add_column("Activity", style="dim", width=12)
+                tbl.add_column("Messages", justify="right", width=10)
+                for i, c in enumerate(all_convs):
+                    is_active = "[green]● ACTIVE[/green]" if c.id == active_conversation_id else "[dim]○[/dim]"
+                    rel_time = format_relative_time(c.created_at)
+                    msg_count = str(len(c.messages)) if c.messages else "0"
+                    tbl.add_row(str(i + 1), is_active, c.title, rel_time, msg_count)
+                console.print(tbl)
+                console.print("[dim]Use 'resume <# or title>' to switch, 'rename <title>' to rename, 'fork' to branch, 'export' to save transcript.[/dim]\n")
+                continue
+
+        # 3. Rename session
+        if user_input.lower().startswith("rename "):
+            raw_arg = user_input[7:].strip()
+            parts = raw_arg.split(maxsplit=1)
+            all_convs = await conv_repo.list_conversations(limit=50)
+            target_id = active_conversation_id
+            new_title = raw_arg
+
+            if len(parts) == 2 and parts[0].isdigit():
+                idx = int(parts[0]) - 1
+                if 0 <= idx < len(all_convs):
+                    target_id = all_convs[idx].id
+                    new_title = parts[1]
+
+            if target_id:
+                await conv_repo.update_title(target_id, new_title)
+                console.print(f"[green]Session title updated to:[/green] [bold cyan]{new_title}[/bold cyan]\n")
+            else:
+                console.print("[yellow]No active session to rename. Use 'rename <#> <new title>'[/yellow]\n")
+            continue
+
+        # 4. Fork / Branch session
+        if user_input.lower() == "fork" or user_input.lower().startswith("fork "):
+            arg = user_input[5:].strip() if len(user_input) > 5 else ""
+            all_convs = await conv_repo.list_conversations(limit=50)
+            target_id = active_conversation_id
+
+            if arg.isdigit():
+                idx = int(arg) - 1
+                if 0 <= idx < len(all_convs):
+                    target_id = all_convs[idx].id
+
+            if target_id:
+                forked = await conv_repo.fork_conversation(target_id)
+                if forked:
+                    active_conversation_id = forked.id
+                    console.print(f"[bold green]Forked into new session:[/bold green] [cyan]{forked.title}[/cyan]")
+                    console.print("[dim]All context and memory copied. You can now experiment independently without altering the original session.[/dim]\n")
+            else:
+                console.print("[yellow]No active session to fork. Use 'fork <#>'[/yellow]\n")
+            continue
+
+        # 5. Export session transcript
+        if user_input.lower() == "export" or user_input.lower().startswith("export "):
+            arg = user_input[7:].strip() if len(user_input) > 7 else ""
+            all_convs = await conv_repo.list_conversations(limit=50)
+            target_conv = None
+
+            if arg.isdigit():
+                idx = int(arg) - 1
+                if 0 <= idx < len(all_convs):
+                    target_conv = all_convs[idx]
+            elif active_conversation_id:
+                target_conv = await conv_repo.get_conversation(active_conversation_id)
+
+            if target_conv:
+                md_text = await conv_repo.export_transcript(target_conv.id)
+                slug = re.sub(r"[^a-zA-Z0-9_\-]+", "_", target_conv.title)[:25].strip("_")
+                out_file = curr_dir / f"session_{slug}_{target_conv.id[:6]}.md"
+                out_file.write_text(md_text, encoding="utf-8")
+                console.print(f"[bold green]Exported session transcript to:[/bold green] [cyan]{out_file.name}[/cyan]\n")
+            else:
+                console.print("[yellow]No active session to export. Use 'export <#>'[/yellow]\n")
+            continue
+
+        # 6. Start fresh clean session
         if user_input.lower() in ("new", "new session", "reset session"):
             active_conversation_id = None
             console.print("[cyan]Started fresh conversation session with clean context.[/cyan]\n")

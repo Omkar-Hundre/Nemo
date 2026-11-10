@@ -10,6 +10,7 @@ from pathlib import Path
 from nemo.config.settings import get_settings
 from nemo.integrations.ide.antigravity import AntigravityAdapter
 from nemo.integrations.ide.base import IDEAdapter
+from nemo.integrations.ide.cursor import CursorAdapter
 from nemo.integrations.ide.vscode import VSCodeAdapter
 
 # 4. Types, Protocols, Schemas
@@ -23,6 +24,7 @@ class IDERegistry:
         self._adapters: dict[str, IDEAdapter] = {
             "antigravity": AntigravityAdapter(),
             "vscode": VSCodeAdapter(),
+            "cursor": CursorAdapter(),
         }
 
     def register(self, adapter: IDEAdapter) -> None:

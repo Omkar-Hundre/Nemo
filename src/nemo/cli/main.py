@@ -759,6 +759,7 @@ def history_list(
     """List recent conversation sessions and autonomous task history."""
     async def _list():
         await init_db()
+        from nemo.cli.chat import format_relative_time
         repo = ConversationRepository()
         convs = await repo.list_conversations(limit=limit)
         if not convs:
@@ -766,38 +767,47 @@ def history_list(
             return
 
         table = Table(title="Conversation & Task History", border_style="cyan")
+        table.add_column("#", style="dim", width=4, justify="right")
         table.add_column("Session ID", style="bold cyan", width=12)
         table.add_column("Title / Objective", style="white")
-        table.add_column("Started", style="dim", width=18)
+        table.add_column("Activity", style="dim", width=12)
         table.add_column("Messages", justify="right", width=10)
 
-        for c in convs:
-            started = c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "-"
+        for i, c in enumerate(convs):
+            rel_time = format_relative_time(c.created_at)
             msg_count = str(len(c.messages)) if c.messages else "0"
-            table.add_row(c.id[:8], c.title, started, msg_count)
+            table.add_row(str(i + 1), c.id[:8], c.title, rel_time, msg_count)
 
         console.print(table)
-        console.print("[dim]To view session messages: nemo history show <id>[/dim]")
-        console.print("[dim]To resume a session:      nemo resume <id>[/dim]")
+        console.print("[dim]Use 1-based numbers: 'nemo resume 2' or 'nemo history show 2'[/dim]")
 
     asyncio.run(_list())
 
 
 @history_app.command("show")
 def history_show(
-    conversation_id: str = typer.Argument(..., help="Conversation ID (or prefix) to inspect."),
+    conversation_id: str = typer.Argument(..., help="Conversation ID, 1-based number (#), or title keyword."),
 ) -> None:
     """Show transcript of a conversation session."""
     async def _show():
         await init_db()
         repo = ConversationRepository()
         convs = await repo.list_conversations(limit=100)
-        matched = [c for c in convs if c.id.startswith(conversation_id)]
-        if not matched:
+        c = None
+
+        if conversation_id.isdigit():
+            idx = int(conversation_id) - 1
+            if 0 <= idx < len(convs):
+                c = convs[idx]
+        if not c:
+            matched = [cv for cv in convs if cv.id.startswith(conversation_id) or conversation_id.lower() in cv.title.lower()]
+            if matched:
+                c = matched[0]
+
+        if not c:
             console.print(f"[red]No conversation found matching '{conversation_id}'[/red]")
             return
 
-        c = matched[0]
         console.print(Panel(f"[bold cyan]Session:[/bold cyan] {c.title}\n[dim]ID: {c.id} | Created: {c.created_at}[/dim]", border_style="cyan"))
 
         messages = await repo.get_messages(c.id, limit=100)
@@ -812,18 +822,27 @@ def history_show(
 
 @history_app.command("delete")
 def history_delete(
-    conversation_id: str = typer.Argument(..., help="Conversation ID to delete."),
+    conversation_id: str = typer.Argument(..., help="Conversation ID or 1-based number (#) to delete."),
 ) -> None:
     """Delete a conversation session and all its messages."""
     async def _del():
         await init_db()
         repo = ConversationRepository()
         convs = await repo.list_conversations(limit=100)
-        matched = [c for c in convs if c.id.startswith(conversation_id)]
-        if not matched:
+        c = None
+
+        if conversation_id.isdigit():
+            idx = int(conversation_id) - 1
+            if 0 <= idx < len(convs):
+                c = convs[idx]
+        if not c:
+            matched = [cv for cv in convs if cv.id.startswith(conversation_id)]
+            if matched:
+                c = matched[0]
+
+        if not c:
             console.print(f"[red]No conversation found matching '{conversation_id}'[/red]")
             return
-        c = matched[0]
         deleted = await repo.delete_conversation(c.id)
         if deleted:
             console.print(f"[green]Deleted conversation {c.id[:8]} ({c.title})[/green]")
@@ -835,7 +854,7 @@ def history_delete(
 
 @app.command("resume")
 def resume(
-    conversation_id: str = typer.Argument(..., help="Conversation ID or prefix to resume."),
+    conversation_id: str | None = typer.Argument(None, help="Optional conversation ID, 1-based number (#), or title keyword to resume."),
 ) -> None:
     """Resume interactive chat session with context and memory from a previous conversation."""
     from nemo.cli.chat import run_interactive_chat
@@ -843,11 +862,29 @@ def resume(
         await init_db()
         repo = ConversationRepository()
         convs = await repo.list_conversations(limit=100)
-        matched = [c for c in convs if c.id.startswith(conversation_id)]
-        if not matched:
-            console.print(f"[red]No conversation found matching '{conversation_id}'[/red]")
-            return
-        await run_interactive_chat(initial_conversation_id=matched[0].id)
+        selected_id = None
+
+        if conversation_id:
+            if conversation_id.isdigit():
+                idx = int(conversation_id) - 1
+                if 0 <= idx < len(convs):
+                    selected_id = convs[idx].id
+                else:
+                    console.print(f"[red]Invalid session number #{conversation_id}. Available: 1 to {len(convs)}[/red]")
+                    return
+            else:
+                matches = [c for c in convs if conversation_id.lower() in c.title.lower()]
+                if matches:
+                    selected_id = matches[0].id
+                else:
+                    id_matches = [c for c in convs if c.id.startswith(conversation_id)]
+                    if id_matches:
+                        selected_id = id_matches[0].id
+                    else:
+                        console.print(f"[red]No conversation found matching '{conversation_id}'[/red]")
+                        return
+
+        await run_interactive_chat(initial_conversation_id=selected_id)
 
     asyncio.run(_resume())
 

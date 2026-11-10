@@ -9,6 +9,7 @@
 # 3. Local / internal imports
 from nemo.integrations.ide.antigravity import AntigravityAdapter
 from nemo.integrations.ide.base import IDEAdapter
+from nemo.integrations.ide.cursor import CursorAdapter
 from nemo.integrations.ide.registry import IDERegistry
 from nemo.integrations.ide.vscode import VSCodeAdapter
 
@@ -19,5 +20,5 @@ from nemo.integrations.ide.vscode import VSCodeAdapter
 # (None)
 
 # 6. Public exports
-__all__ = ["IDEAdapter", "AntigravityAdapter", "VSCodeAdapter", "IDERegistry"]
+__all__ = ["IDEAdapter", "AntigravityAdapter", "VSCodeAdapter", "CursorAdapter", "IDERegistry"]
 
