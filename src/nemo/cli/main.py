@@ -15,7 +15,7 @@ import uvicorn
 
 # 3. Local / internal imports
 from nemo import __version__
-from nemo.agent.orchestrator import AgentOrchestrator
+from nemo.agent.orchestrator import AgentOrchestrator, extract_json_block
 from nemo.ai.providers.nvidia import NvidiaNimProvider
 from nemo.ai.schemas import ChatMessage
 from nemo.cli.doctor import run_doctor
@@ -77,6 +77,21 @@ memory_repo = MemoryRepository()
 project_repo = ProjectRepository()
 ide_registry = IDERegistry()
 daemon_client = DaemonClient()
+
+
+@app.callback(invoke_without_command=True)
+def default_main(ctx: typer.Context) -> None:
+    """Default invocation with no arguments launches interactive chat REPL."""
+    if ctx.invoked_subcommand is None:
+        from nemo.cli.chat import run_interactive_chat
+        asyncio.run(run_interactive_chat())
+
+
+@app.command()
+def chat() -> None:
+    """Launch persistent conversational development operating session."""
+    from nemo.cli.chat import run_interactive_chat
+    asyncio.run(run_interactive_chat())
 
 
 @app.command()
@@ -486,7 +501,11 @@ def task(
             status_icon = "[green]✓[/green]" if record["success"] else "[red]✗[/red]"
             console.print(f" {status_icon} [bold cyan]{record['tool']}[/bold cyan] [dim]{record['arguments']}[/dim]")
 
-        console.print(f"\n[bold]Final Outcome:[/bold]\n{state.final_answer or 'Completed.'}")
+        ans = state.final_answer or "Completed."
+        parsed = extract_json_block(ans)
+        if parsed and parsed.get("action") == "finish" and "answer" in parsed:
+            ans = parsed["answer"]
+        console.print(f"\n[bold]Final Outcome:[/bold]\n{ans}")
 
     asyncio.run(_run_agent())
 

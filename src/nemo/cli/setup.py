@@ -117,3 +117,4 @@ async def run_setup_wizard(custom_key: str | None = None) -> bool:
 
 # 6. Public exports
 __all__ = ["run_setup_wizard"]
+

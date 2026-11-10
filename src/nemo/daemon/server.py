@@ -127,3 +127,4 @@ async def trigger_index(req: IndexRequest) -> dict[str, Any]:
 
 # 6. Public exports
 __all__ = ["app", "session_manager"]
+

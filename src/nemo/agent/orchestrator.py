@@ -1,4 +1,4 @@
-"""Autonomous agent workflow orchestrator with tool dispatch and diagnosis."""
+"""Autonomous agent workflow orchestrator with tool dispatch and budget synthesis."""
 
 # 1. Standard library imports
 import json
@@ -26,27 +26,29 @@ Available Tools:
 {memory_context}
 
 Execution Rules:
-1. When you need to take an action, output EXACTLY ONE JSON block matching:
+1. ALWAYS use the highest-level tool available:
+   - If asked to explain, analyze, or understand the project, call `get_codebase_summary` FIRST in Step 1.
+   - Do NOT traverse directories folder-by-folder using `list_directory`.
+   - Use `search_code` or `semantic_search` to find symbols and concepts.
+2. When you need to take an action, output EXACTLY ONE JSON block:
 ```json
 {{"action": "tool_call", "tool": "<tool_name>", "arguments": {{...}}}}
 ```
-2. When the objective is achieved or you have answered the user, output:
+3. When you have collected enough information to answer the objective, output:
 ```json
-{{"action": "finish", "answer": "<final answer / summary of work done>"}}
+{{"action": "finish", "answer": "<complete, detailed final answer>"}}
 ```
-3. Never invent facts. Base conclusions strictly on tool execution results. Output pure valid JSON.
+4. Base conclusions strictly on tool execution results. Output pure valid JSON.
 """
 
 # 5. Core logic / classes / functions
 def extract_json_block(text: str) -> dict[str, Any] | None:
     """Extract and parse first valid JSON block from text."""
-    # Match markdown code block ```json ... ```
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
     candidate = match.group(1) if match else text.strip()
     try:
         return json.loads(candidate)
     except Exception:
-        # Fallback regex search for { ... }
         match_obj = re.search(r"(\{.*\})", text, re.DOTALL)
         if match_obj:
             try:
@@ -74,9 +76,9 @@ class AgentOrchestrator:
         objective: str,
         working_directory: Path | str | None = None,
         project_id: str | None = None,
-        max_iterations: int = 8,
+        max_iterations: int = 12,
     ) -> AgentState:
-        """Execute autonomous loop until goal is reached or iteration limit hit."""
+        """Execute autonomous loop until goal is reached with automatic synthesis on budget limits."""
         cwd = str(Path(working_directory).resolve()) if working_directory else str(Path.cwd())
         state = AgentState(
             objective=objective,
@@ -109,12 +111,10 @@ class AgentOrchestrator:
         while state.iteration < state.max_iterations and not state.completed:
             state.iteration += 1
 
-            # Call reasoning model
             llm_res = await self.provider.generate(messages, temperature=0.2, max_tokens=2048)
             action_data = extract_json_block(llm_res.content)
 
             if not action_data:
-                # LLM output direct text conclusion
                 state.completed = True
                 state.final_answer = llm_res.content
                 break
@@ -125,8 +125,12 @@ class AgentOrchestrator:
                 state.final_answer = action_data.get("answer", "Task completed.")
                 break
 
-            if action_type == "tool_call":
-                tool_name = action_data.get("tool", "")
+            # Handle both {"action": "tool_call", "tool": "..."} and {"action": "<tool_name>"} or {"tool": "..."}
+            tool_name = action_data.get("tool")
+            if not tool_name and action_type and action_type not in ("finish", "tool_call"):
+                tool_name = action_type
+
+            if tool_name and self.tools.get_tool(tool_name):
                 tool_args = action_data.get("arguments", {})
 
                 # Execute tool
@@ -146,7 +150,6 @@ class AgentOrchestrator:
                 }
                 state.tool_history.append(step_record)
 
-                # Append assistant call and tool observation to prompt history
                 messages.append(ChatMessage(role="assistant", content=llm_res.content))
                 obs_content = json.dumps({
                     "tool": tool_name,
@@ -159,8 +162,17 @@ class AgentOrchestrator:
                 state.final_answer = llm_res.content
                 break
 
+        # Fallback Synthesis: If budget reached without explicit finish, synthesize from tool observations
         if not state.completed and state.iteration >= state.max_iterations:
-            state.final_answer = f"Iteration budget reached ({state.max_iterations} steps). Last status recorded."
+            synthesis_prompt = (
+                f"You have reached the observation budget ({state.max_iterations} steps). "
+                f"Based strictly on all the tool outputs and data collected above, synthesize a complete, detailed, "
+                f"and professional answer to the original objective: '{objective}'."
+            )
+            messages.append(ChatMessage(role="user", content=synthesis_prompt))
+            final_res = await self.provider.generate(messages, temperature=0.3, max_tokens=3000)
+            state.completed = True
+            state.final_answer = final_res.content
 
         return state
 
@@ -183,4 +195,3 @@ class AgentOrchestrator:
 
 # 6. Public exports
 __all__ = ["AgentOrchestrator", "extract_json_block"]
-

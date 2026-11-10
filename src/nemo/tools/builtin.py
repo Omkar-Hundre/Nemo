@@ -1,4 +1,4 @@
-"""Built-in development and operating tools for NEMO agent."""
+"""Built-in development, operating, and code intelligence tools for NEMO agent."""
 
 # 1. Standard library imports
 import asyncio
@@ -9,9 +9,13 @@ from typing import Any
 # (None)
 
 # 3. Local / internal imports
+from nemo.ai.embeddings import NvidiaEmbeddingProvider, cosine_similarity
 from nemo.common.types import RiskLevel, ToolResult
 from nemo.execution.shells.native import NativeSubprocessExecutor
 from nemo.integrations.ide.registry import IDERegistry
+from nemo.intelligence.chunks import StructureAwareChunker
+from nemo.intelligence.indexer import ProjectIndexer
+from nemo.intelligence.parser import ASTCodeParser
 from nemo.memory.repository import MemoryRepository
 from nemo.security.policy import SecurityPolicy
 from nemo.tools.base import BaseTool, ToolDefinition
@@ -20,6 +24,183 @@ from nemo.tools.base import BaseTool, ToolDefinition
 # (None)
 
 # 5. Core logic / classes / functions
+class CodebaseSummaryTool(BaseTool):
+    """Provides instant architectural summary of all indexed modules, files, and symbols."""
+    name = "get_codebase_summary"
+    description = "Get high-level architecture overview of the current project, including all modules, files, and symbols in one step."
+    risk_level = RiskLevel.L0
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Optional workspace path (default '.')."},
+                },
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        target = (base_dir / arguments.get("path", ".")).resolve()
+        indexer = ProjectIndexer(target)
+        summary = indexer.get_summary()
+        return ToolResult(success=True, data=summary)
+
+
+class CodeSearchTool(BaseTool):
+    """Fast keyword search across file paths and code symbols."""
+    name = "search_code"
+    description = "Search codebase for matching filenames, modules, and symbol definitions (classes/functions)."
+    risk_level = RiskLevel.L0
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search keyword or symbol name."},
+                    "limit": {"type": "integer", "description": "Max results (default 15)."},
+                },
+                "required": ["query"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        query = arguments.get("query", "")
+        limit = int(arguments.get("limit", 15))
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        indexer = ProjectIndexer(base_dir)
+        matches = indexer.search_code(query, limit=limit)
+        return ToolResult(success=True, data={"query": query, "matches": matches})
+
+
+class SymbolLookupTool(BaseTool):
+    """Deep AST lookup of a specific symbol, its methods, docstring, and call references."""
+    name = "lookup_symbol"
+    description = "Inspect exact AST definition, line numbers, docstrings, and callers of a function or class."
+    risk_level = RiskLevel.L0
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "symbol_name": {"type": "string", "description": "Name of class, function, or method."},
+                    "file_path": {"type": "string", "description": "Path to file containing symbol."},
+                },
+                "required": ["symbol_name", "file_path"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        sym_name = arguments.get("symbol_name", "")
+        file_path = arguments.get("file_path", "")
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        target = (base_dir / file_path).resolve()
+
+        if not target.exists() or not target.is_file():
+            return ToolResult(success=False, error=f"File not found: {target}")
+
+        parsed = ASTCodeParser.parse_python_file(target)
+        for cls in parsed.classes:
+            if cls["name"] == sym_name:
+                return ToolResult(success=True, data={"symbol": cls, "kind": "class", "file": str(target)})
+            for m in cls.get("methods", []):
+                if m["name"] == sym_name or f"{cls['name']}.{m['name']}" == sym_name:
+                    return ToolResult(success=True, data={"symbol": m, "kind": "method", "class": cls["name"], "file": str(target)})
+
+        for fn in parsed.functions:
+            if fn["name"] == sym_name:
+                return ToolResult(success=True, data={"symbol": fn, "kind": "function", "file": str(target)})
+
+        return ToolResult(success=False, error=f"Symbol '{sym_name}' not found in {file_path}")
+
+
+class SemanticSearchTool(BaseTool):
+    """Dense vector semantic search across structure-aware code chunks."""
+    name = "semantic_search"
+    description = "Search codebase semantically using dense vector similarity (NVIDIA Embeddings)."
+    risk_level = RiskLevel.L0
+
+    def __init__(self) -> None:
+        self.embed_provider = NvidiaEmbeddingProvider()
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Natural language query describing desired code or logic."},
+                    "file_path": {"type": "string", "description": "Optional file path to constrain search."},
+                    "top_k": {"type": "integer", "description": "Top matches to return (default 3)."},
+                },
+                "required": ["query"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        query = arguments.get("query", "")
+        top_k = int(arguments.get("top_k", 3))
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+
+        file_filter = arguments.get("file_path")
+        if file_filter:
+            target_files = [(base_dir / file_filter).resolve()]
+        else:
+            indexer = ProjectIndexer(base_dir)
+            target_files = [Path(f.path) for f in indexer.get_indexed_files()[:20]]
+
+        # Generate chunks
+        all_chunks = []
+        for tf in target_files:
+            if tf.exists() and tf.is_file():
+                all_chunks.extend(StructureAwareChunker.chunk_file(tf))
+
+        if not all_chunks:
+            return ToolResult(success=True, data={"results": []})
+
+        query_vec = await self.embed_provider.embed_query(query)
+        if not query_vec:
+            # Fallback to keyword match if embedding unavailable
+            matches = [c.model_dump() for c in all_chunks if any(w.lower() in c.content.lower() for w in query.split())]
+            return ToolResult(success=True, data={"results": matches[:top_k], "mode": "keyword_fallback"})
+
+        # Embed chunk texts
+        chunk_texts = [c.content[:500] for c in all_chunks[:30]]
+        doc_vecs = await self.embed_provider.embed_documents(chunk_texts)
+
+        scored = []
+        for chunk, dvec in zip(all_chunks[:30], doc_vecs):
+            sim = cosine_similarity(query_vec, dvec)
+            scored.append((sim, chunk))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        results = [
+            {
+                "similarity": round(score, 4),
+                "file": item.file_path,
+                "symbol": item.symbol_name,
+                "lines": f"{item.start_line}-{item.end_line}",
+                "snippet": item.content[:300],
+            }
+            for score, item in scored[:top_k]
+        ]
+        return ToolResult(success=True, data={"results": results, "mode": "dense_vector"})
+
+
 class TerminalTool(BaseTool):
     """Executes terminal commands and captures verified exit codes."""
     name = "terminal_execute"
@@ -129,7 +310,7 @@ class WriteFileTool(BaseTool):
         target = (base_dir / rel_path).resolve() if not Path(rel_path).is_absolute() else Path(rel_path).resolve()
 
         # Enforce workspace security boundary
-        if not self.policy.is_path_safe(target):
+        if not self.policy.is_path_safe(target, base_dir=base_dir):
             return ToolResult(success=False, error=f"Access denied: path outside workspace ({target})")
 
         try:
@@ -250,6 +431,10 @@ class IDEOpenTool(BaseTool):
 
 # 6. Public exports
 __all__ = [
+    "CodebaseSummaryTool",
+    "CodeSearchTool",
+    "SymbolLookupTool",
+    "SemanticSearchTool",
     "TerminalTool",
     "ReadFileTool",
     "WriteFileTool",
@@ -257,4 +442,3 @@ __all__ = [
     "MemoryRecallTool",
     "IDEOpenTool",
 ]
-

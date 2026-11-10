@@ -1,12 +1,15 @@
-"""Project directory scanner with ignore rules and language detection."""
+"""Project directory scanner with ignore rules, language detection, and AST symbol extraction."""
 
 # 1. Standard library imports
+import ast
 import fnmatch
 import hashlib
 from pathlib import Path
+import re
+from typing import Any
 
 # 2. Third-party imports
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # 3. Local / internal imports
 # (None)
@@ -57,6 +60,15 @@ EXTENSION_LANGUAGE_MAP = {
 }
 
 
+class CodeSymbol(BaseModel):
+    """Extracted function, class, or method declaration."""
+    name: str
+    kind: str  # "class" | "function" | "method"
+    start_line: int
+    end_line: int
+    docstring: str | None = None
+
+
 class ScannedFile(BaseModel):
     """Metadata for an indexed source file."""
     path: str
@@ -64,6 +76,7 @@ class ScannedFile(BaseModel):
     content_hash: str
     language: str
     size_bytes: int
+    symbols: list[CodeSymbol] = Field(default_factory=list)
 
 # 5. Core logic / classes / functions
 def compute_sha256(file_path: Path) -> str:
@@ -76,6 +89,73 @@ def compute_sha256(file_path: Path) -> str:
         return h.hexdigest()
     except Exception:
         return ""
+
+
+def extract_symbols(file_path: Path, language: str) -> list[CodeSymbol]:
+    """Extract code symbols (classes, functions, methods) from source file."""
+    symbols: list[CodeSymbol] = []
+    try:
+        content = file_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return symbols
+
+    if language == "python":
+        try:
+            tree = ast.parse(content)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ClassDef):
+                    symbols.append(CodeSymbol(
+                        name=node.name,
+                        kind="class",
+                        start_line=node.lineno,
+                        end_line=getattr(node, "end_lineno", node.lineno),
+                        docstring=ast.get_docstring(node),
+                    ))
+                    # Extract class methods
+                    for item in node.body:
+                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            symbols.append(CodeSymbol(
+                                name=f"{node.name}.{item.name}",
+                                kind="method",
+                                start_line=item.lineno,
+                                end_line=getattr(item, "end_lineno", item.lineno),
+                                docstring=ast.get_docstring(item),
+                            ))
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    # Top-level functions
+                    symbols.append(CodeSymbol(
+                        name=node.name,
+                        kind="function",
+                        start_line=node.lineno,
+                        end_line=getattr(node, "end_lineno", node.lineno),
+                        docstring=ast.get_docstring(node),
+                    ))
+            # Sort symbols by line number
+            return sorted(symbols, key=lambda s: s.start_line)
+        except Exception:
+            return symbols
+
+    # Generic regex symbol extraction for JS/TS/Go/Rust
+    if language in ("typescript", "javascript", "typescript-react", "javascript-react", "rust", "go"):
+        lines = content.splitlines()
+        for idx, line in enumerate(lines, start=1):
+            line_str = line.strip()
+            # Functions
+            m_fn = re.match(r"(?:export\s+)?(?:async\s+)?function\s+([a-zA-Z0-9_]+)", line_str)
+            if m_fn:
+                symbols.append(CodeSymbol(name=m_fn.group(1), kind="function", start_line=idx, end_line=idx))
+                continue
+            # Classes
+            m_cls = re.match(r"(?:export\s+)?class\s+([a-zA-Z0-9_]+)", line_str)
+            if m_cls:
+                symbols.append(CodeSymbol(name=m_cls.group(1), kind="class", start_line=idx, end_line=idx))
+                continue
+            # Rust fn / struct
+            m_rs = re.match(r"(?:pub\s+)?(?:fn|struct)\s+([a-zA-Z0-9_]+)", line_str)
+            if m_rs:
+                symbols.append(CodeSymbol(name=m_rs.group(1), kind="function", start_line=idx, end_line=idx))
+
+    return symbols
 
 
 class ProjectScanner:
@@ -117,7 +197,7 @@ class ProjectScanner:
         return False
 
     def scan(self) -> list[ScannedFile]:
-        """Scan workspace and return list of valid scanned files."""
+        """Scan workspace and return list of valid scanned files with symbols."""
         scanned: list[ScannedFile] = []
         if not self.root_path.exists():
             return scanned
@@ -133,6 +213,7 @@ class ProjectScanner:
             lang = EXTENSION_LANGUAGE_MAP.get(ext, "text")
             fhash = compute_sha256(p)
             size = p.stat().st_size
+            symbols = extract_symbols(p, lang)
 
             scanned.append(
                 ScannedFile(
@@ -141,11 +222,19 @@ class ProjectScanner:
                     content_hash=fhash,
                     language=lang,
                     size_bytes=size,
+                    symbols=symbols,
                 )
             )
 
         return sorted(scanned, key=lambda x: x.relative_path)
 
 # 6. Public exports
-__all__ = ["ScannedFile", "ProjectScanner", "compute_sha256", "DEFAULT_IGNORES", "EXTENSION_LANGUAGE_MAP"]
-
+__all__ = [
+    "CodeSymbol",
+    "ScannedFile",
+    "ProjectScanner",
+    "compute_sha256",
+    "extract_symbols",
+    "DEFAULT_IGNORES",
+    "EXTENSION_LANGUAGE_MAP",
+]

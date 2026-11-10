@@ -9,10 +9,14 @@
 # 3. Local / internal imports
 from nemo.tools.base import BaseTool, ToolDefinition
 from nemo.tools.builtin import (
+    CodebaseSummaryTool,
+    CodeSearchTool,
     IDEOpenTool,
     ListDirectoryTool,
     MemoryRecallTool,
     ReadFileTool,
+    SemanticSearchTool,
+    SymbolLookupTool,
     TerminalTool,
     WriteFileTool,
 )
@@ -29,6 +33,10 @@ __all__ = [
     "BaseTool",
     "ToolDefinition",
     "ToolRegistry",
+    "CodebaseSummaryTool",
+    "CodeSearchTool",
+    "SymbolLookupTool",
+    "SemanticSearchTool",
     "TerminalTool",
     "ReadFileTool",
     "WriteFileTool",
@@ -36,4 +44,3 @@ __all__ = [
     "MemoryRecallTool",
     "IDEOpenTool",
 ]
-

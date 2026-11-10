@@ -11,10 +11,14 @@ from nemo.common.types import RiskLevel, ToolResult
 from nemo.security.policy import SecurityPolicy
 from nemo.tools.base import BaseTool, ToolDefinition
 from nemo.tools.builtin import (
+    CodebaseSummaryTool,
+    CodeSearchTool,
     IDEOpenTool,
     ListDirectoryTool,
     MemoryRecallTool,
     ReadFileTool,
+    SemanticSearchTool,
+    SymbolLookupTool,
     TerminalTool,
     WriteFileTool,
 )
@@ -32,11 +36,20 @@ class ToolRegistry:
         self._register_defaults()
 
     def _register_defaults(self) -> None:
-        """Register core development tools."""
+        """Register core development and code intelligence tools."""
+        # 1. High-level architecture & code intelligence
+        self.register(CodebaseSummaryTool())
+        self.register(CodeSearchTool())
+        self.register(SymbolLookupTool())
+        self.register(SemanticSearchTool())
+
+        # 2. Execution and file operations
         self.register(TerminalTool())
         self.register(ReadFileTool())
         self.register(WriteFileTool(policy=self.policy))
         self.register(ListDirectoryTool())
+
+        # 3. Memory & IDE integration
         self.register(MemoryRecallTool())
         self.register(IDEOpenTool())
 
@@ -58,7 +71,7 @@ class ToolRegistry:
         arguments: dict[str, Any],
         context: dict[str, Any] | None = None,
     ) -> ToolResult:
-        """Assess risk and execute registered tool."""
+        """Assess risk and execute registered tool within active context."""
         tool = self._tools.get(name)
         if not tool:
             return ToolResult(success=False, error=f"Unknown tool: '{name}'")
