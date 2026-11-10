@@ -23,6 +23,8 @@ dependencies = [
     "edge-tts>=7.0.0",
     "pywinauto>=0.6.8",
     "pywin32>=306",
+    "ddgs>=9.0.0",
+    "trafilatura>=2.0.0",
 ]
 
 [project.scripts]

@@ -21,10 +21,13 @@ from nemo.tools.builtin import (
     MemoryRecallTool,
     ReadFileTool,
     SemanticSearchTool,
+    SpeakTool,
     SymbolLookupTool,
     SystemInspectorTool,
     TerminalTool,
+    WebResearcherTool,
     WindowsDesktopTool,
+    WindowsGuiTool,
     WriteFileTool,
 )
 from nemo.tools.registry import ToolRegistry
@@ -54,6 +57,9 @@ __all__ = [
     "ApiTesterTool",
     "SystemInspectorTool",
     "WindowsDesktopTool",
+    "WebResearcherTool",
+    "WindowsGuiTool",
+    "SpeakTool",
     "ListDirectoryTool",
     "MemoryRecallTool",
     "IDEOpenTool",

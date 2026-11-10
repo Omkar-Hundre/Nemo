@@ -17,14 +17,27 @@ import sqlite3
 import subprocess
 import time
 from typing import Any
+from urllib.parse import quote
 import webbrowser
 
 # 2. Third-party imports
+from ddgs import DDGS
 import docx
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Inches, Pt, RGBColor
 import httpx
 import pypdf
+import trafilatura
+try:
+    import win32con
+    import win32gui
+    import win32process
+    from pywinauto import Desktop
+except ImportError:
+    win32con = None
+    win32gui = None
+    win32process = None
+    Desktop = None
 
 # 3. Local / internal imports
 from nemo.ai.embeddings import NvidiaEmbeddingProvider, cosine_similarity
@@ -41,6 +54,7 @@ from nemo.intelligence.scanner import ProjectScanner
 from nemo.memory.repository import MemoryRepository
 from nemo.security.policy import SecurityPolicy
 from nemo.tools.base import BaseTool, ToolDefinition
+from nemo.voice.speaker import VoiceSpeaker
 
 # 4. Types, Protocols, Schemas
 # (None)
@@ -2863,6 +2877,625 @@ class WindowsDesktopTool(BaseTool):
         except Exception as exc:
             return ToolResult(success=False, error=f"Desktop integration error: {exc}")
 
+
+class WebResearcherTool(BaseTool):
+    """Autonomous web research, clean technical documentation extraction, PyPI inspection, and Wikipedia queries."""
+    name = "web_researcher"
+    description = (
+        "Autonomous web research and technical document extraction: search live web via DuckDuckGo, "
+        "extract clean documentation and articles without ad clutter via Trafilatura, query PyPI package specs, "
+        "and fetch encyclopedic definitions via Wikipedia."
+    )
+    risk_level = RiskLevel.L0
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["search", "fetch_doc", "pypi", "wiki", "research"],
+                        "description": "Research action: 'search' (web search), 'fetch_doc' (extract clean page markdown), 'pypi' (package specs), 'wiki' (encyclopedic definition), 'research' (search and synthesize top article).",
+                    },
+                    "query": {"type": "string", "description": "Search query, topic, definition, or question."},
+                    "url": {"type": "string", "description": "Web page URL (for 'fetch_doc')."},
+                    "package_name": {"type": "string", "description": "Python package name (for 'pypi')."},
+                    "limit": {"type": "integer", "description": "Maximum search results to return (default 5)."},
+                    "max_chars": {"type": "integer", "description": "Maximum characters of article content to return (default 6000)."},
+                },
+                "required": ["action"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        action = arguments.get("action", "search").lower().strip()
+
+        try:
+            if action == "search":
+                q = arguments.get("query", "").strip()
+                if not q:
+                    return ToolResult(success=False, error="query parameter is required for 'search' action.")
+                limit = int(arguments.get("limit", 5))
+
+                results = []
+                queries_to_try = [q]
+                words = q.split()
+                if len(words) > 2:
+                    queries_to_try.append(" ".join(words[:2]))
+
+                search_err = None
+                for candidate in queries_to_try:
+                    try:
+                        with DDGS() as ddgs:
+                            raw = list(ddgs.text(candidate, max_results=limit))
+                            if raw:
+                                for item in raw:
+                                    results.append({
+                                        "title": item.get("title", ""),
+                                        "url": item.get("href", ""),
+                                        "snippet": item.get("body", ""),
+                                    })
+                                break
+                    except Exception as exc:
+                        search_err = exc
+                        if "no results found" in str(exc).lower():
+                            continue
+
+                if not results and search_err and "no results found" not in str(search_err).lower():
+                    return ToolResult(success=False, error=f"DuckDuckGo search failed: {search_err}")
+
+                return ToolResult(
+                    success=True,
+                    data={"action": "search", "query": q, "count": len(results), "results": results},
+                )
+
+            elif action == "fetch_doc":
+                target_url = arguments.get("url", "").strip()
+                if not target_url:
+                    return ToolResult(success=False, error="url parameter is required for 'fetch_doc' action.")
+                max_chars = int(arguments.get("max_chars", 6000))
+
+                try:
+                    downloaded = trafilatura.fetch_url(target_url)
+                    if not downloaded:
+                        return ToolResult(success=False, error=f"Failed to fetch content from URL: {target_url}")
+
+                    extracted_md = trafilatura.extract(
+                        downloaded,
+                        output_format="markdown",
+                        with_metadata=True,
+                        include_comments=False,
+                    ) or ""
+
+                    if not extracted_md:
+                        extracted_md = trafilatura.extract(downloaded, output_format="txt") or "No readable text content extracted."
+
+                    return ToolResult(
+                        success=True,
+                        data={
+                            "action": "fetch_doc",
+                            "url": target_url,
+                            "length_chars": len(extracted_md),
+                            "content": extracted_md[:max_chars],
+                        },
+                    )
+                except Exception as exc:
+                    return ToolResult(success=False, error=f"Document extraction failed: {exc}")
+
+            elif action == "pypi":
+                pkg = arguments.get("package_name") or arguments.get("query", "").strip()
+                if not pkg:
+                    return ToolResult(success=False, error="package_name is required for 'pypi' action.")
+
+                async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                    resp = await client.get(
+                        f"https://pypi.org/pypi/{pkg}/json",
+                        headers={"User-Agent": "NemoAssistant/1.0 (dev@nemo.ai)"},
+                    )
+                    if resp.status_code == 404:
+                        return ToolResult(success=False, error=f"Python package '{pkg}' was not found on PyPI.")
+                    elif not resp.is_success:
+                        return ToolResult(success=False, error=f"PyPI API returned status code {resp.status_code}.")
+
+                    data = resp.json()
+                    info = data.get("info", {})
+                    urls = info.get("project_urls") or {}
+
+                    return ToolResult(
+                        success=True,
+                        data={
+                            "action": "pypi",
+                            "name": info.get("name", pkg),
+                            "latest_version": info.get("version", ""),
+                            "summary": info.get("summary", ""),
+                            "author": info.get("author", ""),
+                            "license": info.get("license", ""),
+                            "home_page": info.get("home_page") or urls.get("Homepage", ""),
+                            "documentation": urls.get("Documentation") or urls.get("Docs", ""),
+                            "repository": urls.get("Repository") or urls.get("Source", ""),
+                            "requires_python": info.get("requires_python", ""),
+                            "dependencies": (info.get("requires_dist") or [])[:15],
+                        },
+                    )
+
+            elif action == "wiki":
+                topic = arguments.get("query", "").strip()
+                if not topic:
+                    return ToolResult(success=False, error="query parameter is required for 'wiki' action.")
+
+                encoded_topic = quote(topic.replace(" ", "_"))
+                async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                    resp = await client.get(
+                        f"https://en.wikipedia.org/api/rest_v1/page/summary/{encoded_topic}",
+                        headers={"User-Agent": "NemoAssistant/1.0 (dev@nemo.ai)"},
+                    )
+                    if resp.status_code == 404:
+                        return ToolResult(success=False, error=f"No Wikipedia article found for topic: '{topic}'.")
+                    elif not resp.is_success:
+                        return ToolResult(success=False, error=f"Wikipedia API returned status code {resp.status_code}.")
+
+                    w_data = resp.json()
+                    urls = w_data.get("content_urls", {}).get("desktop", {})
+
+                    return ToolResult(
+                        success=True,
+                        data={
+                            "action": "wiki",
+                            "title": w_data.get("title", topic),
+                            "description": w_data.get("description", ""),
+                            "summary": w_data.get("extract", ""),
+                            "url": urls.get("page", ""),
+                        },
+                    )
+
+            elif action == "research":
+                topic = arguments.get("query", "").strip()
+                if not topic:
+                    return ToolResult(success=False, error="query parameter is required for 'research' action.")
+
+                results = []
+                queries_to_try = [topic]
+                words = topic.split()
+                if len(words) > 2:
+                    queries_to_try.append(" ".join(words[:2]))
+
+                for q_cand in queries_to_try:
+                    try:
+                        with DDGS() as ddgs:
+                            raw = list(ddgs.text(q_cand, max_results=3))
+                            if raw:
+                                for item in raw:
+                                    results.append({
+                                        "title": item.get("title", ""),
+                                        "url": item.get("href", ""),
+                                        "snippet": item.get("body", ""),
+                                    })
+                                break
+                    except Exception:
+                        continue
+
+                # Fallback to Wikipedia summary if web search yielded 0 results
+                if not results and words:
+                    try:
+                        encoded = quote(words[0])
+                        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+                            wresp = await client.get(
+                                f"https://en.wikipedia.org/api/rest_v1/page/summary/{encoded}",
+                                headers={"User-Agent": "NemoAssistant/1.0 (dev@nemo.ai)"},
+                            )
+                            if wresp.is_success:
+                                w_info = wresp.json()
+                                page_url = w_info.get("content_urls", {}).get("desktop", {}).get("page", "")
+                                results.append({
+                                    "title": w_info.get("title", topic),
+                                    "url": page_url,
+                                    "snippet": w_info.get("extract", "")[:300],
+                                })
+                    except Exception:
+                        pass
+
+                deep_content = ""
+                primary_url = ""
+                if results and results[0].get("url"):
+                    primary_url = results[0]["url"]
+                    try:
+                        dl = trafilatura.fetch_url(primary_url)
+                        if dl:
+                            extracted = trafilatura.extract(dl, output_format="markdown", with_metadata=True)
+                            if extracted:
+                                deep_content = extracted[:4000]
+                    except Exception:
+                        pass
+
+                if not deep_content and results and results[0].get("snippet"):
+                    deep_content = results[0]["snippet"]
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "research",
+                        "query": topic,
+                        "sources_count": len(results),
+                        "sources": results,
+                        "deep_source_url": primary_url,
+                        "deep_extracted_content": deep_content,
+                    },
+                )
+
+            else:
+                return ToolResult(success=False, error=f"Unsupported research action: '{action}'")
+
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Web researcher error: {exc}")
+
+
+class WindowsGuiTool(BaseTool):
+    """Production Windows desktop GUI automation tool via UI Automation (UIA) and Win32."""
+    name = "gui_automation"
+    description = (
+        "Automate Windows GUI desktop applications using UI Automation (UIA): "
+        "launch apps, list top-level windows, focus, minimize, maximize, restore, "
+        "close, click controls, type keystrokes/hotkeys, and inspect accessible control trees."
+    )
+    risk_level = RiskLevel.L2
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "list_windows",
+                            "launch",
+                            "focus",
+                            "minimize",
+                            "maximize",
+                            "restore",
+                            "close",
+                            "click",
+                            "type_keys",
+                            "inspect_tree",
+                        ],
+                        "description": "Desktop GUI action to perform.",
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Window title substring or executable path/command (for launch, focus, minimize, etc.).",
+                    },
+                    "control": {
+                        "type": "string",
+                        "description": "Control name, title, or automation ID to click.",
+                    },
+                    "keys": {
+                        "type": "string",
+                        "description": "Keystrokes, text, or shortcuts to send (e.g. 'Hello{ENTER}', '^s' for Ctrl+S).",
+                    },
+                    "max_depth": {
+                        "type": "integer",
+                        "description": "Max accessible controls to return during tree inspection (default: 30).",
+                        "default": 30,
+                    },
+                },
+                "required": ["action"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    @staticmethod
+    def _get_interactive_desktop_handle():
+        """Retrieve desktop handle for user's interactive 'Default' desktop on WinSta0."""
+        try:
+            user32 = ctypes.windll.user32
+            h_desk = user32.OpenDesktopW("Default", 0, False, 0x10000000)
+            if h_desk:
+                user32.SetThreadDesktop(h_desk)
+                return h_desk
+        except Exception:
+            pass
+        return None
+
+    def _find_window(self, target: str):
+        self._get_interactive_desktop_handle()
+        if not Desktop:
+            return None
+        desktop = Desktop(backend="uia")
+        target_lower = target.lower().strip()
+        for win in desktop.windows():
+            try:
+                t = win.window_text()
+                if target_lower in t.lower():
+                    return win
+            except Exception:
+                continue
+        return None
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        if platform.system() != "Windows":
+            return ToolResult(success=False, error="gui_automation is only supported on Windows.")
+
+        action = arguments.get("action", "").lower().strip()
+        target = arguments.get("target", "").strip()
+
+        try:
+            if action == "list_windows":
+                h_desk = self._get_interactive_desktop_handle()
+                windows = []
+                if win32gui and win32process:
+                    def enum_cb(hwnd, _):
+                        if win32gui.IsWindowVisible(hwnd):
+                            title = win32gui.GetWindowText(hwnd).strip()
+                            if title and title not in ("Default IME", "MSCTFIME UI"):
+                                _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                                windows.append({"hwnd": hwnd, "pid": pid, "title": title})
+
+                    if h_desk:
+                        try:
+                            win32gui.EnumDesktopWindows(h_desk, enum_cb, None)
+                        except Exception:
+                            try:
+                                win32gui.EnumWindows(enum_cb, None)
+                            except Exception:
+                                pass
+                    else:
+                        try:
+                            win32gui.EnumWindows(enum_cb, None)
+                        except Exception:
+                            pass
+
+                if not windows and Desktop:
+                    try:
+                        d = Desktop(backend="uia")
+                        for w in d.windows():
+                            t = w.window_text()
+                            if t:
+                                windows.append({"hwnd": w.handle, "pid": w.process_id(), "title": t})
+                    except Exception:
+                        pass
+
+                return ToolResult(
+                    success=True,
+                    data={"action": "list_windows", "count": len(windows), "windows": windows},
+                )
+
+            elif action == "launch":
+                if not target:
+                    return ToolResult(success=False, error="target parameter is required for 'launch' action.")
+                proc = subprocess.Popen(target, shell=True)
+                return ToolResult(
+                    success=True,
+                    data={"action": "launch", "target": target, "pid": proc.pid},
+                )
+
+            elif action in ("focus", "minimize", "maximize", "restore", "close"):
+                if not target:
+                    return ToolResult(success=False, error=f"target window title is required for '{action}' action.")
+                win = self._find_window(target)
+                if not win:
+                    return ToolResult(success=False, error=f"No window found matching '{target}'.")
+
+                title = win.window_text()
+                if action == "focus":
+                    win.set_focus()
+                elif action == "minimize":
+                    win.minimize()
+                elif action == "maximize":
+                    win.maximize()
+                elif action == "restore":
+                    win.restore()
+                elif action == "close":
+                    win.close()
+
+                return ToolResult(
+                    success=True,
+                    data={"action": action, "target": target, "window": title},
+                )
+
+            elif action == "type_keys":
+                if not target:
+                    return ToolResult(success=False, error="target window title is required for 'type_keys' action.")
+                keys = arguments.get("keys", "")
+                if not keys:
+                    return ToolResult(success=False, error="keys parameter is required for 'type_keys' action.")
+
+                win = self._find_window(target)
+                if not win:
+                    return ToolResult(success=False, error=f"No window found matching '{target}'.")
+
+                win.set_focus()
+                win.type_keys(keys, with_spaces=True)
+                return ToolResult(
+                    success=True,
+                    data={"action": "type_keys", "window": win.window_text(), "keys": keys},
+                )
+
+            elif action == "click":
+                if not target:
+                    return ToolResult(success=False, error="target window title is required for 'click' action.")
+                ctrl_query = arguments.get("control", "").strip().lower()
+                if not ctrl_query:
+                    return ToolResult(success=False, error="control parameter is required for 'click' action.")
+
+                win = self._find_window(target)
+                if not win:
+                    return ToolResult(success=False, error=f"No window found matching '{target}'.")
+
+                target_ctrl = None
+                for c in win.descendants():
+                    try:
+                        name = (c.element_info.name or "").lower()
+                        auto_id = (c.element_info.automation_id or "").lower()
+                        if ctrl_query in name or ctrl_query == auto_id:
+                            target_ctrl = c
+                            break
+                    except Exception:
+                        continue
+
+                if not target_ctrl:
+                    return ToolResult(
+                        success=False,
+                        error=f"Control matching '{ctrl_query}' not found in window '{win.window_text()}'.",
+                    )
+
+                try:
+                    target_ctrl.click_input()
+                except Exception:
+                    try:
+                        target_ctrl.invoke()
+                    except Exception as inv_err:
+                        return ToolResult(success=False, error=f"Failed to click control: {inv_err}")
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "click",
+                        "window": win.window_text(),
+                        "control": target_ctrl.element_info.name or ctrl_query,
+                    },
+                )
+
+            elif action == "inspect_tree":
+                if not target:
+                    return ToolResult(success=False, error="target window title is required for 'inspect_tree' action.")
+                win = self._find_window(target)
+                if not win:
+                    return ToolResult(success=False, error=f"No window found matching '{target}'.")
+
+                limit = int(arguments.get("max_depth", 30))
+                controls = []
+                for c in win.descendants():
+                    try:
+                        name = c.element_info.name or ""
+                        auto_id = c.element_info.automation_id or ""
+                        ctrl_type = c.element_info.control_type or ""
+                        if name or auto_id:
+                            controls.append({
+                                "type": ctrl_type,
+                                "name": name,
+                                "automation_id": auto_id,
+                                "enabled": c.is_enabled(),
+                            })
+                            if len(controls) >= limit:
+                                break
+                    except Exception:
+                        continue
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "inspect_tree",
+                        "window": win.window_text(),
+                        "controls_count": len(controls),
+                        "controls": controls,
+                    },
+                )
+
+            else:
+                return ToolResult(success=False, error=f"Unsupported gui action: '{action}'")
+
+        except Exception as exc:
+            return ToolResult(success=False, error=f"GUI automation error: {exc}")
+
+
+class SpeakTool(BaseTool):
+    """Text-to-speech tool using Microsoft Natural Neural Voices with human intonation and emotion."""
+    name = "voice_speak"
+    description = (
+        "Speak text aloud using Microsoft Natural Neural voices (Jenny, Guy, Aria, Prabhat, Neerja) "
+        "with human emotion, humor, and natural speed, or synthesize speech to an MP3 file."
+    )
+    risk_level = RiskLevel.L0
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "Text message to speak aloud.",
+                    },
+                    "voice": {
+                        "type": "string",
+                        "description": "Voice persona ('jenny', 'guy', 'aria', 'prabhat', 'neerja', default: 'jenny').",
+                        "default": "jenny",
+                    },
+                    "rate": {
+                        "type": "string",
+                        "description": "Speech rate modifier (e.g. '+15%', '+0%', '-10%', default: '+15%').",
+                        "default": "+15%",
+                    },
+                    "save_to": {
+                        "type": "string",
+                        "description": "Optional destination file path to save synthesized MP3 audio file.",
+                    },
+                    "play": {
+                        "type": "boolean",
+                        "description": "Whether to play synthesized audio aloud through speakers (default: true).",
+                        "default": True,
+                    },
+                },
+                "required": ["text"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        text = arguments.get("text", "").strip()
+        if not text:
+            return ToolResult(success=False, error="text parameter is required.")
+
+        voice = arguments.get("voice", "jenny")
+        rate = arguments.get("rate", "+15%")
+        save_to = arguments.get("save_to")
+        play = arguments.get("play", True)
+
+        try:
+            speaker = VoiceSpeaker(default_voice=voice, default_rate=rate)
+            resolved_voice = speaker.resolve_voice(voice)
+
+            if save_to:
+                target_path = Path(save_to).resolve()
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                audio_file = await speaker.generate_speech(text, voice=resolved_voice, rate=rate, output_file=target_path)
+                if play and platform.system() == "Windows":
+                    speaker.play_audio(audio_file, wait=False)
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "synthesize",
+                        "voice": resolved_voice,
+                        "rate": rate,
+                        "file": str(audio_file),
+                        "played": play,
+                        "bytes": audio_file.stat().st_size,
+                    },
+                )
+            else:
+                played = await speaker.speak(text, voice=resolved_voice, rate=rate, wait=False)
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "speak",
+                        "voice": resolved_voice,
+                        "rate": rate,
+                        "text": text,
+                        "played": played,
+                    },
+                )
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Voice synthesis error: {exc}")
+
+
 # 6. Public exports
 __all__ = [
     "CodebaseSummaryTool",
@@ -2897,4 +3530,7 @@ __all__ = [
     "ApiTesterTool",
     "SystemInspectorTool",
     "WindowsDesktopTool",
+    "WebResearcherTool",
+    "WindowsGuiTool",
+    "SpeakTool",
 ]

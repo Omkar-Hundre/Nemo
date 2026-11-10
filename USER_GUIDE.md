@@ -27,13 +27,17 @@ This guide is designed to be your permanent handbook. Whether you are using NEMO
    - [3. API & Webhook Testing Client (`api_tester`)](#3-api--webhook-testing-client-api_tester)
    - [4. Live Windows System & Hardware Inspector (`system_inspector`)](#4-live-windows-system--hardware-inspector-system_inspector)
    - [5. Windows Clipboard & Toast Notifications (`desktop_integration`)](#5-windows-clipboard--toast-notifications-desktop_integration)
-6. [Document & Presentation Intelligence](#6-document--presentation-intelligence)
+6. [Autonomous Web Researcher & Technical Doc Scraper (`web_researcher`)](#6-autonomous-web-researcher--technical-doc-scraper-web_researcher)
+7. [Microsoft Natural Neural Voice (`voice_speak` & `nemo speak`)](#7-microsoft-natural-neural-voice-voice_speak--nemo-speak)
+8. [Autonomous Windows Desktop GUI Automation (`gui_automation`)](#8-autonomous-windows-desktop-gui-automation-gui_automation)
+9. [Background Daemon & Auto-Start on Laptop Boot](#9-background-daemon--auto-start-on-laptop-boot)
+10. [Document & Presentation Intelligence](#10-document--presentation-intelligence)
    - [Creating Styled Word Documents (.docx)](#creating-styled-word-documents-docx)
    - [Reading Documents (.docx, .pdf, .csv, .tsv)](#reading-documents-docx-pdf-csv-tsv)
    - [Generating Interactive Slide Presentations](#generating-interactive-slide-presentations)
-7. [Deployment & Safety Auditing](#7-deployment--safety-auditing)
-8. [Real-World Step-by-Step Workflows](#8-real-world-step-by-step-workflows)
-9. [Troubleshooting & FAQs](#9-troubleshooting--faqs)
+11. [Deployment & Safety Auditing](#11-deployment--safety-auditing)
+12. [Real-World Step-by-Step Workflows](#12-real-world-step-by-step-workflows)
+13. [Troubleshooting & FAQs](#13-troubleshooting--faqs)
 
 ---
 
@@ -232,7 +236,104 @@ Bridge NEMO directly with your Windows desktop:
 
 ---
 
-## 6. Document & Presentation Intelligence
+## 6. Autonomous Web Researcher & Technical Doc Scraper (`web_researcher`)
+
+NEMO connects directly to the live Internet without fragile HTML tag soup or BeautifulSoup breakage:
+
+- **Live Web Search**: Queries DuckDuckGo for top technical citations (title, URL, summary snippet).
+- **Clean Documentation Extraction**: Uses **Trafilatura** to extract pristine Markdown from MDN, official framework guides, blogs, and documentation pages—stripping navigation bars, cookie banners, tracking scripts, and advertisements automatically.
+- **PyPI Package Inspector**: Direct JSON queries to official PyPI endpoints for latest package version, author, dependencies, license, and repository links.
+- **Wikipedia Encyclopedic Definitions**: Queries Wikipedia REST API for clean definitions, scientific terms, and conceptual summaries.
+- **Multi-Source Research Synthesis**: Combines web citations with deep article content extraction in a single autonomous pass.
+
+```powershell
+# Search and research live topics:
+nemo "research the latest features in FastAPI and summarize them"
+
+# Look up official package specs:
+nemo "check the pydantic package on PyPI and tell me its dependencies"
+
+# Fetch and summarize an online documentation page cleanly:
+nemo "fetch the documentation at https://fastapi.tiangolo.com/tutorial/ and summarize key takeaways"
+```
+
+---
+
+## 7. Microsoft Natural Neural Voice (`voice_speak` & `nemo speak`)
+
+NEMO features human-like, expressive speech powered by Microsoft Natural Neural Text-to-Speech voices. It completely avoids legacy robotic SAPI5 voices, speaking with natural intonation, humor, and a responsive `+15%` speaking speed:
+
+### Available Voice Personas:
+- **`jenny`** (`en-US-JennyNeural`): Warm, natural, and expressive (default).
+- **`guy`** (`en-US-GuyNeural`): Friendly, conversational, and energetic.
+- **`aria`** (`en-US-AriaNeural`): Crisp, professional, and clear.
+- **`prabhat`** (`en-IN-PrabhatNeural`): Confident, clear Indian English.
+- **`neerja`** (`en-IN-NeerjaNeural`): Expressive, articulate Indian English.
+
+### Using Voice in CLI & Natural Language:
+```powershell
+# Speak text aloud immediately through your speakers:
+nemo speak "Hello Omkar, your full test suite passed with 145 tests!"
+
+# Use a different persona and speed:
+nemo speak "Let's review the pull request before deploying." --voice guy --rate +20%
+
+# Synthesize speech to an MP3 file:
+nemo speak "Architecture report generated successfully." --save docs/announcement.mp3 --no-play
+
+# Ask NEMO in chat or tasks to speak back:
+nemo "run the tests, fix any errors, and speak the final summary aloud"
+```
+
+---
+
+## 8. Autonomous Windows Desktop GUI Automation (`gui_automation`)
+
+Control and automate Windows desktop applications directly using Microsoft UI Automation (UIA) and native Win32. Unlike fragile image-matching frameworks, NEMO directly inspects the Windows accessibility control tree—making it immune to 125%/150% DPI scaling and theme changes:
+
+- **`list_windows`**: Lists all active top-level desktop windows with titles and process IDs.
+- **`launch`**: Starts desktop applications (`notepad.exe`, `calc.exe`, `code`, or full file paths).
+- **`focus`**: Brings any application window directly to the foreground.
+- **`minimize` / `maximize` / `restore`**: Changes window display state.
+- **`close`**: Gracefully terminates or closes an application.
+- **`type_keys`**: Focuses a window and sends text or keyboard shortcuts (e.g. `^s` for `Ctrl+S`, `{ENTER}`).
+- **`click`**: Clicks buttons, tabs, or menu items by title or Automation ID.
+- **`inspect_tree`**: Retrieves the accessible hierarchy of controls inside any window.
+
+```powershell
+# Natural language GUI instructions:
+nemo "launch Notepad, type 'Hello from Nemo Developer Runtime', and save the file"
+nemo "minimize the Chrome window and bring Antigravity IDE to the foreground"
+nemo "list all open windows on my desktop and tell me their process IDs"
+```
+
+---
+
+## 9. Background Daemon & Auto-Start on Laptop Boot
+
+To have NEMO ready in the background whenever you open your laptop:
+
+```powershell
+# Check current auto-start status:
+nemo daemon autostart
+
+# Enable automatic start at Windows logon:
+nemo daemon autostart --enable
+
+# Disable automatic start:
+nemo daemon autostart --disable
+
+# Start the background daemon detached manually:
+nemo daemon start --detach
+
+# Stop the background daemon:
+nemo daemon stop
+```
+When enabled, NEMO registers a lightweight, non-blocking startup script in `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` that requires zero administrator rights and runs silently in the background at logon.
+
+---
+
+## 10. Document & Presentation Intelligence
 
 NEMO can author and read enterprise-grade documents without third-party office software installed.
 
@@ -271,7 +372,7 @@ nemo "generate a slide deck at presentation.html explaining our Q1 engineering r
 
 ---
 
-## 7. Deployment & Safety Auditing
+## 11. Deployment & Safety Auditing
 
 Before you push code to GitHub or deploy to Netlify/Vercel, ask NEMO to audit your workspace:
 
@@ -288,7 +389,7 @@ NEMO automatically scans for:
 
 ---
 
-## 8. Real-World Step-by-Step Workflows
+## 12. Real-World Step-by-Step Workflows
 
 ### Workflow 1: "I Just Cloned a New Repository"
 ```powershell
@@ -315,7 +416,7 @@ nemo "run the tests, audit for secret leaks, stage modified files, commit with a
 
 ---
 
-## 9. Troubleshooting & FAQs
+## 13. Troubleshooting & FAQs
 
 #### Q: Where does NEMO store my session history and memories?
 **A:** Everything is stored locally on your machine in a SQLite database at:  
@@ -337,3 +438,4 @@ uv tool install --editable . --force
 ---
 
 *This guide is continually updated as new capabilities (Voice Control, Windows GUI Automation, AST Refactoring) are released.*
+

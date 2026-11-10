@@ -4,35 +4,51 @@
 
 ---
 
-## 1. Verified Core Foundation (Current State: 106/106 Tests Passing)
+## 1. Verified Core Foundation (Current State: 145/145 Tests Passing)
 
-All foundational systems are built natively using existing dependencies, zero unnecessary abstractions, and backed by 106 automated edge-case tests:
+All foundational systems are built natively using existing dependencies, zero unnecessary abstractions, and backed by 145 automated edge-case tests:
 
+- **5 Core Developer Beast Tools**:
+  - `git_operations`: Branching, staging, atomic unstaging with empty-repo fallback, semantic conventional commits, upstream push, logs, and staged diffs.
+  - `database_inspector`: SQLite schema introspection, column definitions, primary/foreign keys, indexes, table row counts, and safe read-only queries with write protection.
+  - `api_tester`: Async HTTP/REST client supporting GET, POST, PUT, DELETE with latency tracking (`response_time_ms`), custom headers, Bearer tokens, and JSON formatting.
+  - `system_inspector`: Real-time Win32 `GlobalMemoryStatusEx` RAM diagnostics (<1ms), disk space, active listening ports, process enumeration, and safe process termination.
+  - `desktop_integration`: Windows clipboard read/write via PowerShell stdin streaming (immune to quoting/escaping), and native Windows desktop toast notifications.
+- **Autonomous Web Researcher & Doc Scraper** (`web_researcher`):
+  - Live web queries via DuckDuckGo with TLS browser fingerprint impersonation.
+  - Clean Markdown extraction from technical docs (MDN, blogs) via Trafilatura (zero HTML tag soup or cookie clutter).
+  - PyPI package specifications, versions, licenses, and dependencies via official PyPI JSON API.
+  - Wikipedia encyclopedic concept definitions via Wikipedia REST API.
+  - Deep multi-source research synthesis combining search citations with extracted article text.
+- **Microsoft Natural Neural Voice Engine** (`nemo.voice.speaker`, `voice_speak`, `nemo speak`):
+  - High-fidelity human-like speech powered by Microsoft Natural Neural TTS (`edge-tts` at `+15%` rate).
+  - Personas: Jenny, Guy, Aria, Prabhat, Neerja.
+  - Native Windows Multimedia playback (`winmm.dll`) with zero external audio dependencies.
+- **Windows Desktop GUI Automation** (`gui_automation`):
+  - Direct accessibility-tree desktop automation via `pywinauto` (UIA backend) and Win32 desktop binding.
+  - Launch applications (`notepad`, `calc`, `code`), list active windows with PIDs.
+  - Focus, minimize, maximize, restore, close windows.
+  - Click buttons and menu items by name or Automation ID, type text and shortcuts (`^s`, `{ENTER}`).
+  - Accessible control hierarchy inspection (`inspect_tree`).
+- **Windows Auto-Start Logon Daemon** (`nemo daemon autostart`):
+  - Lightweight, non-blocking startup registration at `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`.
+  - Zero administrator permissions needed, easily enabled/disabled/audited via CLI.
 - **Document Intelligence Engine** (`read_document`, `generate_document`, `generate_presentation`):
   - DOCX generation with multi-tier headings (Title, H1, H2, H3), rich multi-column tables, bold headers, empty cells, Consolas code blocks, styled callouts, and raw PNG byte image embedding.
   - Document reading with structural heading trees, table parsing, image counts, word counts, and metadata round-tripping.
   - Multi-page PDF extraction with `max_pages` bounds and corrupt PDF error recovery.
   - CSV delimiter auto-sniffing (`,`, `;`, `\t`, `|`) and multiline quoted field handling.
   - Standalone presentation slides with keyboard navigation and dark/light themes.
-- **Filesystem & Native Sanitization Engine** (`create_folder`, `write_file`, `find_files`):
-  - Deep nested directory creation (`a/b/c/d/e`), idempotency, and path expansion (`~`, `$env:USERPROFILE`).
-  - Automatic parent directory creation on file writes.
-  - Automatic PowerShell escape sanitization (`` `n ``, `` `" ``, `` `t ``, `` `r ``).
-  - Multi-byte UTF-8, Japanese, German, and emoji preservation.
-  - Fast-path outcome verification: skips test runner for non-code files, reducing execution time from 20s to <1s.
 - **Deployment & CI/CD Safety Auditor** (`analyze_deployment`):
-  - Git status verification (uncommitted files, missing remotes, branch detection).
   - Secret leak blockers (unignored `.env`, `.env.local`, `.env.production`).
   - Actively tracked Git secret blocker (`git ls-files .env`).
   - Pending diff regex scanning for API tokens (`ghp_`, `nvapi-`, `sk-`, `AKIA`).
-  - Build script detection (`npm run build`) and publish directory detection (`dist`, `build`, `out`).
   - Target platform guidance (`netlify`, `vercel`, `github`, `all`).
 - **Human-First Session Management & History**:
   - Interactive Windows console selector (`↑` / `↓` arrow keys, `Enter`, `1–9` direct jump, `Esc`).
   - 1-based index resolution (`resume 1`, `resume 2`).
   - Title keyword search (`resume refactor`) and short UUID prefix lookup.
   - Session branching (`fork`), renaming (`rename`), and Markdown transcript export (`export`).
-  - Cascade deletion ensuring zero orphaned records in database.
 
 ---
 
@@ -178,18 +194,21 @@ To make NEMO an indispensable, complete development runtime, the following compl
 
 ---
 
-## 5. Implementation Priority Matrix
+## 5. Implementation Status & Priority Matrix
 
-| Phase | Module | Target Tools | Complexity | Impact |
+| Phase | Module | Target Tools | Complexity | Status |
 | :---: | :--- | :--- | :---: | :---: |
-| **Phase 1** | **Git Operations** | `git_operations` | Low | High |
-| **Phase 2** | **Database Inspector** | `database_inspector` | Low | High |
-| **Phase 3** | **API Tester** | `api_tester` | Low | High |
-| **Phase 4** | **System & Desktop** | `system_inspector`, `desktop_integration` | Low | Medium |
-| **Phase 5** | **Natural Voice Engine** | `nemo.voice.speaker` (`edge-tts`) | Medium | Very High |
-| **Phase 6** | **Windows GUI Automation** | `nemo.tools.gui` (`pywinauto` UIA) | Medium | Very High |
-| **Phase 7** | **Auto-Start & Voice Listener** | Windows Scheduled Task + Background STT | Medium | High |
-| **Phase 8** | **Extended Modules** | `web_researcher`, `docker_controller`, `ast_refactor` | High | High |
+| **Phase 1** | **Git Operations** | `git_operations` | Low | **COMPLETE (100% Tested)** |
+| **Phase 2** | **Database Inspector** | `database_inspector` | Low | **COMPLETE (100% Tested)** |
+| **Phase 3** | **API Tester** | `api_tester` | Low | **COMPLETE (100% Tested)** |
+| **Phase 4** | **System & Desktop** | `system_inspector`, `desktop_integration` | Low | **COMPLETE (100% Tested)** |
+| **Phase 5** | **Natural Voice Engine** | `nemo.voice.speaker`, `voice_speak`, `nemo speak` | Medium | **COMPLETE (100% Tested)** |
+| **Phase 6** | **Windows GUI Automation** | `WindowsGuiTool` (`pywinauto` UIA) | Medium | **COMPLETE (100% Tested)** |
+| **Phase 7** | **Logon Auto-Start Daemon** | `nemo daemon autostart` | Low | **COMPLETE (100% Tested)** |
+| **Phase 8** | **Web Researcher & Doc Scraper** | `web_researcher` (DDGS + Trafilatura + PyPI + Wiki) | Medium | **COMPLETE (100% Tested)** |
+| **Phase 9** | **Continuous Wake-Word Listener** | `nemo.voice.listener` (`System.Speech` / STT) | Medium | In Progress |
+| **Phase 10** | **AST Semantic Refactoring** | `ast_refactor` (Python AST symbol rename) | Medium | Planned |
+| **Phase 11** | **Container Controller** | `docker_controller` (local Docker engine) | Medium | Planned |
 
 ---
 

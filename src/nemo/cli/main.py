@@ -2,7 +2,10 @@
 
 # 1. Standard library imports
 import asyncio
+import os
 from pathlib import Path
+import platform
+import shutil
 import subprocess
 import sys
 
@@ -217,6 +220,9 @@ def daemon_start(
         console.print(f"[green]Daemon started in background (PID {proc.pid}) at http://127.0.0.1:{port}[/green]")
         return
 
+    console.print(f"[bold cyan]Starting NEMO Daemon on http://127.0.0.1:{port}...[/bold cyan]")
+    uvicorn.run(daemon_fastapi_app, host="127.0.0.1", port=port, log_level="info")
+
 
 @daemon_app.command("stop")
 def daemon_stop(
@@ -247,10 +253,45 @@ def daemon_stop(
     if stopped:
         console.print("[green]Daemon stopped successfully.[/green]")
     else:
-        console.print("[dim]No running daemon found on port 8765.[/dim]")
+        console.print(f"[dim]No running daemon found on port {port}.[/dim]")
 
-    console.print(f"[bold cyan]Starting NEMO Daemon on http://127.0.0.1:{port}...[/bold cyan]")
-    uvicorn.run(daemon_fastapi_app, host="127.0.0.1", port=port, log_level="info")
+
+@daemon_app.command("autostart")
+def daemon_autostart(
+    enable: bool = typer.Option(False, "--enable", "-e", help="Enable automatic background daemon start at Windows logon."),
+    disable: bool = typer.Option(False, "--disable", "-d", help="Disable automatic background daemon start."),
+) -> None:
+    """Manage automatic daemon startup at Windows logon."""
+    startup_dir = Path(os.environ.get("APPDATA", "")) / r"Microsoft\Windows\Start Menu\Programs\Startup"
+    script_path = startup_dir / "nemo-daemon.cmd"
+
+    if enable:
+        startup_dir.mkdir(parents=True, exist_ok=True)
+        nemo_exe = shutil.which("nemo")
+        if nemo_exe:
+            batch_content = f'@echo off\r\nstart "" /B "{nemo_exe}" daemon start --detach\r\n'
+        else:
+            batch_content = f'@echo off\r\nstart "" /B "{sys.executable}" -m uvicorn nemo.daemon.server:app --port 8765 --host 127.0.0.1\r\n'
+
+        script_path.write_text(batch_content, encoding="utf-8")
+        console.print("[bold green]Auto-start ENABLED.[/bold green]")
+        console.print(f"[dim]Registered startup script: {script_path}[/dim]")
+        return
+
+    if disable:
+        if script_path.exists():
+            script_path.unlink()
+            console.print("[green]Auto-start DISABLED. Removed startup script.[/green]")
+        else:
+            console.print("[dim]Auto-start is already disabled.[/dim]")
+        return
+
+    if script_path.exists():
+        console.print("[bold green]Auto-start is currently ENABLED.[/bold green]")
+        console.print(f"[dim]Registered at: {script_path}[/dim]")
+    else:
+        console.print("[bold yellow]Auto-start is currently DISABLED.[/bold yellow]")
+        console.print("[dim]Enable with: 'nemo daemon autostart --enable'[/dim]")
 
 
 @daemon_app.command("status")
@@ -1059,6 +1100,38 @@ def ask(
         sys.exit(1)
 
 
+@app.command()
+def speak(
+    text: str = typer.Argument(..., help="Text message to speak aloud using Microsoft Neural Voice."),
+    voice: str = typer.Option("jenny", "--voice", "-v", help="Persona alias ('jenny', 'guy', 'aria', 'prabhat', 'neerja')."),
+    rate: str = typer.Option("+15%", "--rate", "-r", help="Speaking speed rate (e.g. '+15%', '+0%')."),
+    save: str | None = typer.Option(None, "--save", "-s", help="Save synthesized MP3 to specified file path."),
+    play: bool = typer.Option(True, "--play/--no-play", help="Play audio immediately through system speakers."),
+) -> None:
+    """Speak text aloud using Microsoft Natural Neural Voices with human intonation and emotion."""
+    async def _speak():
+        from nemo.voice.speaker import VoiceSpeaker
+        speaker = VoiceSpeaker(default_voice=voice, default_rate=rate)
+        resolved_voice = speaker.resolve_voice(voice)
+        console.print(f"[bold cyan]Synthesizing ({resolved_voice} @ {rate}):[/bold cyan] {text}")
+
+        if save:
+            out_path = Path(save).resolve()
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            saved = await speaker.generate_speech(text, voice=resolved_voice, rate=rate, output_file=out_path)
+            console.print(f"[green]Audio saved to: {saved} ({saved.stat().st_size} bytes)[/green]")
+            if play and platform.system() == "Windows":
+                speaker.play_audio(saved, wait=True)
+        else:
+            played = await speaker.speak(text, voice=resolved_voice, rate=rate, wait=True)
+            if played:
+                console.print("[green]Playback completed.[/green]")
+            else:
+                console.print("[yellow]Audio synthesized (playback skipped or audio device busy).[/yellow]")
+
+    asyncio.run(_speak())
+
+
 # 6. Public exports
 __all__ = ["app", "main"]
 
@@ -1068,7 +1141,7 @@ def main() -> None:
     known_commands = {
         "chat", "setup", "version", "status", "doctor", "run", "daemon",
         "sessions", "memory", "project", "index", "ide", "worker", "task",
-        "history", "resume",
+        "history", "resume", "speak",
         "dependencies", "verify", "diagnose", "ask", "remember",
         "--help", "-h", "--version", "-v",
     }
