@@ -11,11 +11,15 @@ from nemo.common.types import RiskLevel, ToolResult
 from nemo.security.policy import SecurityPolicy
 from nemo.tools.base import BaseTool, ToolDefinition
 from nemo.tools.builtin import (
+    ASTStructuralSearchTool,
     CodebaseSummaryTool,
+    CodeGraphQueryTool,
     CodeSearchTool,
     GitDiffTool,
     IDEOpenTool,
+    LaunchBackgroundProcessTool,
     ListDirectoryTool,
+    ManageBackgroundProcessTool,
     MemoryRecallTool,
     OpenBrowserTool,
     ProjectEnvironmentTool,
@@ -40,14 +44,18 @@ class ToolRegistry:
 
     def _register_defaults(self) -> None:
         """Register core development and code intelligence tools."""
-        # 1. High-level architecture & code intelligence
+        # 1. High-level architecture, code intelligence & graph traversal
         self.register(CodebaseSummaryTool())
         self.register(CodeSearchTool())
         self.register(SymbolLookupTool())
         self.register(SemanticSearchTool())
+        self.register(ASTStructuralSearchTool())
+        self.register(CodeGraphQueryTool())
 
         # 2. Execution and file operations
         self.register(TerminalTool())
+        self.register(LaunchBackgroundProcessTool())
+        self.register(ManageBackgroundProcessTool())
         self.register(ReadFileTool())
         self.register(WriteFileTool(policy=self.policy))
         self.register(ListDirectoryTool())

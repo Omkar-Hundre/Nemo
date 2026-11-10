@@ -197,6 +197,7 @@ class SessionManager:
         self,
         session_id: str,
         command: str,
+        log_path: Path | str | None = None,
     ) -> SessionInfo:
         """Spawn independent process on Windows detached from caller event loop."""
         session = self._sessions.get(session_id)
@@ -208,11 +209,24 @@ class SessionManager:
 
         # Use CREATE_NEW_PROCESS_GROUP on Windows to prevent signals bubbling to caller
         flags = subprocess.CREATE_NEW_PROCESS_GROUP
+
+        stdout_target = subprocess.DEVNULL
+        stderr_target = subprocess.DEVNULL
+        if log_path:
+            target_log = Path(log_path)
+            if not target_log.is_absolute():
+                target_log = Path(session.cwd) / target_log
+            target_log.parent.mkdir(parents=True, exist_ok=True)
+            log_file = open(target_log, "a", encoding="utf-8", buffering=1)
+            stdout_target = log_file
+            stderr_target = log_file
+            session.append_output(f"[LOG] Redirecting output to: {target_log}")
+
         proc = subprocess.Popen(
             cmd_args,
             cwd=session.cwd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=stdout_target,
+            stderr=stderr_target,
             creationflags=flags,
         )
 

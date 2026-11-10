@@ -1,8 +1,10 @@
 """Built-in development, operating, and code intelligence tools for NEMO agent."""
 
 # 1. Standard library imports
+import ast
 import asyncio
 from pathlib import Path
+import socket
 from typing import Any
 import webbrowser
 
@@ -12,12 +14,15 @@ import webbrowser
 # 3. Local / internal imports
 from nemo.ai.embeddings import NvidiaEmbeddingProvider, cosine_similarity
 from nemo.common.types import RiskLevel, ToolResult
+from nemo.execution.sessions.manager import SessionManager
 from nemo.execution.shells.native import NativeSubprocessExecutor
 from nemo.integrations.ide.registry import IDERegistry
 from nemo.intelligence.chunks import StructureAwareChunker
+from nemo.intelligence.graph import ProjectGraphBuilder
 from nemo.intelligence.indexer import ProjectIndexer
 from nemo.intelligence.packages import PackageManagerDetector
 from nemo.intelligence.parser import ASTCodeParser
+from nemo.intelligence.scanner import ProjectScanner
 from nemo.memory.repository import MemoryRepository
 from nemo.security.policy import SecurityPolicy
 from nemo.tools.base import BaseTool, ToolDefinition
@@ -523,6 +528,325 @@ class GitDiffTool(BaseTool):
             },
         )
 
+
+class LaunchBackgroundProcessTool(BaseTool):
+    """Launch long-running dev servers or watchers in background session without blocking."""
+    name = "launch_background_process"
+    description = "Launch long-running background command (e.g. 'npm run dev', 'python main.py'). Verifies process started, checks port readiness, captures initial log lines, and returns immediately."
+    risk_level = RiskLevel.L1
+
+    def __init__(self, session_manager: SessionManager | None = None) -> None:
+        self.session_mgr = session_manager or SessionManager()
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Command to run in background (e.g. 'npm run dev')."},
+                    "port": {"type": "integer", "description": "Optional port number to poll for readiness (e.g. 5173, 3000)."},
+                    "wait_seconds": {"type": "number", "description": "Seconds to wait for port or initial logs (default 2.0)."},
+                    "log_file": {"type": "string", "description": "Optional relative log filename (default 'nemo_dev_server.log')."},
+                },
+                "required": ["command"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        command = arguments.get("command", "")
+        port = arguments.get("port")
+        wait_seconds = float(arguments.get("wait_seconds", 2.0))
+        log_name = arguments.get("log_file", "nemo_dev_server.log")
+
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        log_path = base_dir / log_name
+
+        session = self.session_mgr.create_session(cwd=base_dir)
+        try:
+            self.session_mgr.launch_background(session.session_id, command, log_path=log_path)
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Failed to launch background process: {exc}")
+
+        # Poll port or wait brief interval
+        port_ready = False
+        start_time = asyncio.get_event_loop().time()
+        while asyncio.get_event_loop().time() - start_time < wait_seconds:
+            if port:
+                try:
+                    with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                        port_ready = True
+                        break
+                except Exception:
+                    pass
+            await asyncio.sleep(0.3)
+
+        # Check PID is alive
+        alive = self.session_mgr._is_pid_alive(session.pid) if session.pid else False
+
+        # Read initial log tail
+        recent_logs = []
+        if log_path.exists():
+            try:
+                recent_logs = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]
+            except Exception:
+                pass
+
+        return ToolResult(
+            success=alive,
+            data={
+                "session_id": session.session_id,
+                "pid": session.pid,
+                "running": alive,
+                "port_ready": port_ready,
+                "log_file": str(log_path),
+                "recent_logs": recent_logs,
+            },
+            error=None if alive else "Process terminated immediately after start. Inspect recent_logs for errors.",
+        )
+
+
+class ManageBackgroundProcessTool(BaseTool):
+    """Check status, inspect logs, or terminate active background sessions."""
+    name = "manage_background_process"
+    description = "Manage active background processes: inspect logs, check if PID is alive, or terminate process tree."
+    risk_level = RiskLevel.L1
+
+    def __init__(self, session_manager: SessionManager | None = None) -> None:
+        self.session_mgr = session_manager or SessionManager()
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string", "description": "Session ID of the background process."},
+                    "action": {
+                        "type": "string",
+                        "enum": ["status", "logs", "stop"],
+                        "description": "Action to perform: 'status', 'logs', or 'stop'.",
+                    },
+                },
+                "required": ["session_id", "action"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        session_id = arguments.get("session_id", "")
+        action = arguments.get("action", "status")
+
+        session = self.session_mgr.get_session(session_id)
+        if not session:
+            return ToolResult(success=False, error=f"Session '{session_id}' not found.")
+
+        if action == "stop":
+            terminated = await self.session_mgr.terminate(session_id)
+            return ToolResult(success=terminated, data={"session_id": session_id, "stopped": terminated})
+
+        # status or logs
+        alive = self.session_mgr._is_pid_alive(session.pid) if session.pid else False
+        return ToolResult(
+            success=True,
+            data={
+                "session_id": session_id,
+                "pid": session.pid,
+                "status": "running" if alive else "terminated",
+                "output_tail": session.recent_output[-30:],
+            },
+        )
+
+
+class ASTStructuralSearchTool(BaseTool):
+    """Structural AST pattern search across codebase for functions, classes, decorators, and calls."""
+    name = "ast_grep"
+    description = "Search codebase using standard library Python AST analysis. Locate functions, classes, decorators, call sites, and signatures across files without fragile text regex."
+    risk_level = RiskLevel.L0
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "node_type": {
+                        "type": "string",
+                        "description": "AST node type: 'FunctionDef', 'AsyncFunctionDef', 'ClassDef', 'Call', or 'any' (default 'any').",
+                    },
+                    "name_pattern": {"type": "string", "description": "Name or substring of function, class, or call target to locate."},
+                    "decorator": {"type": "string", "description": "Optional decorator name (e.g. 'pytest.mark.asyncio', 'app.get')."},
+                    "path": {"type": "string", "description": "Relative directory or file to search (default '.')."},
+                    "limit": {"type": "integer", "description": "Max results to return (default 25)."},
+                },
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        node_type = arguments.get("node_type", "any")
+        name_pattern = arguments.get("name_pattern", "").lower()
+        decorator_filter = arguments.get("decorator", "").lower()
+        path_arg = arguments.get("path", ".")
+        limit = int(arguments.get("limit", 25))
+
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        target = (base_dir / path_arg).resolve()
+
+        files: list[Path] = []
+        if target.is_file() and target.suffix.lower() == ".py":
+            files = [target]
+        elif target.is_dir():
+            files = [
+                p for p in target.rglob("*.py")
+                if not any(ign in p.parts for ign in (".venv", "venv", "node_modules", ".git", "__pycache__", "dist", "build"))
+            ]
+
+        matches = []
+        for file_path in files:
+            if len(matches) >= limit:
+                break
+            try:
+                content = file_path.read_text(encoding="utf-8", errors="replace")
+                tree = ast.parse(content, filename=str(file_path))
+            except Exception:
+                continue
+
+            rel_file = str(file_path.relative_to(base_dir)).replace("\\", "/")
+
+            for node in ast.walk(tree):
+                if len(matches) >= limit:
+                    break
+
+                curr_type = type(node).__name__
+                if node_type != "any":
+                    if node_type in ("FunctionDef", "function") and curr_type in ("FunctionDef", "AsyncFunctionDef"):
+                        pass
+                    elif curr_type != node_type:
+                        continue
+
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    name = node.name
+                    if name_pattern and name_pattern not in name.lower():
+                        continue
+                    decorators = []
+                    for d in node.decorator_list:
+                        try:
+                            decorators.append(ast.unparse(d))
+                        except Exception:
+                            if isinstance(d, ast.Name):
+                                decorators.append(d.id)
+                    if decorator_filter and not any(decorator_filter in dec.lower() for dec in decorators):
+                        continue
+                    doc = ast.get_docstring(node) or ""
+                    matches.append({
+                        "file": rel_file,
+                        "kind": "async_function" if isinstance(node, ast.AsyncFunctionDef) else "function",
+                        "name": name,
+                        "line": node.lineno,
+                        "end_line": getattr(node, "end_lineno", node.lineno),
+                        "decorators": decorators,
+                        "docstring": doc[:120],
+                    })
+
+                elif isinstance(node, ast.ClassDef):
+                    name = node.name
+                    if name_pattern and name_pattern not in name.lower():
+                        continue
+                    doc = ast.get_docstring(node) or ""
+                    matches.append({
+                        "file": rel_file,
+                        "kind": "class",
+                        "name": name,
+                        "line": node.lineno,
+                        "end_line": getattr(node, "end_lineno", node.lineno),
+                        "docstring": doc[:120],
+                    })
+
+                elif isinstance(node, ast.Call) and (node_type == "Call" or (not node_type and name_pattern)):
+                    target_name = ""
+                    if isinstance(node.func, ast.Name):
+                        target_name = node.func.id
+                    elif isinstance(node.func, ast.Attribute):
+                        target_name = node.func.attr
+                    if name_pattern and name_pattern not in target_name.lower():
+                        continue
+                    if target_name:
+                        matches.append({
+                            "file": rel_file,
+                            "kind": "call",
+                            "name": target_name,
+                            "line": getattr(node, "lineno", 1),
+                        })
+
+        return ToolResult(success=True, data={"count": len(matches), "matches": matches})
+
+
+class CodeGraphQueryTool(BaseTool):
+    """Query architectural graph relationships (who calls a function, what files import a module)."""
+    name = "query_code_graph"
+    description = "Query architectural code relationships: inspect every caller of a function, what files import a module, or what symbols are declared across modules."
+    risk_level = RiskLevel.L0
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query_type": {
+                        "type": "string",
+                        "enum": ["callers", "callees", "imports", "declarations"],
+                        "description": "Relationship query type: 'callers' (who calls this), 'callees' (who does this call), 'imports', or 'declarations'.",
+                    },
+                    "target": {"type": "string", "description": "Target symbol, function, or module name."},
+                    "path": {"type": "string", "description": "Workspace path (default '.')."},
+                },
+                "required": ["query_type"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        query_type = arguments.get("query_type", "callers")
+        target = arguments.get("target", "")
+        path_arg = arguments.get("path", ".")
+
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        root = (base_dir / path_arg).resolve()
+
+        scanner = ProjectScanner(root)
+        scanned = scanner.scan()
+        py_files = [Path(f.path) for f in scanned if f.language == "python"]
+
+        graph = ProjectGraphBuilder.build_graph(project_name=root.name, root_path=root, python_files=py_files)
+
+        if query_type == "callers":
+            matches = graph.find_callers(target)
+        elif query_type == "callees":
+            matches = graph.find_callees(target)
+        elif query_type == "imports":
+            matches = graph.find_imports(target)
+        elif query_type == "declarations":
+            matches = graph.find_declarations(name_filter=target)
+        else:
+            return ToolResult(success=False, error=f"Unknown query_type: '{query_type}'")
+
+        return ToolResult(
+            success=True,
+            data={
+                "query_type": query_type,
+                "target": target,
+                "count": len(matches),
+                "results": matches,
+            },
+        )
+
 # 6. Public exports
 __all__ = [
     "CodebaseSummaryTool",
@@ -538,4 +862,8 @@ __all__ = [
     "OpenBrowserTool",
     "ProjectEnvironmentTool",
     "GitDiffTool",
+    "LaunchBackgroundProcessTool",
+    "ManageBackgroundProcessTool",
+    "ASTStructuralSearchTool",
+    "CodeGraphQueryTool",
 ]

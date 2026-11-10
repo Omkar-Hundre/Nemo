@@ -15,8 +15,17 @@ from nemo.agent.orchestrator import AgentOrchestrator
 from nemo.agent.verifier import OutcomeVerifier, VerificationResult
 from nemo.ai.schemas import LLMResponse
 from nemo.common.types import ToolResult
+from nemo.execution.sessions.manager import SessionManager
 from nemo.intelligence.packages import PackageManagerDetector
-from nemo.tools.builtin import GitDiffTool, OpenBrowserTool, ProjectEnvironmentTool
+from nemo.tools.builtin import (
+    ASTStructuralSearchTool,
+    CodeGraphQueryTool,
+    GitDiffTool,
+    LaunchBackgroundProcessTool,
+    ManageBackgroundProcessTool,
+    OpenBrowserTool,
+    ProjectEnvironmentTool,
+)
 from nemo.tools.registry import ToolRegistry
 
 # 4. Types, Protocols, Schemas
@@ -238,6 +247,83 @@ async def test_git_diff_tool():
     assert "status" in res.data
 
 
+@pytest.mark.asyncio
+async def test_background_session_tools_lifecycle():
+    """Verify background process launch, log capture, and termination."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        state_file = tmp_path / "sessions.json"
+        sess_mgr = SessionManager(state_file=state_file)
+
+        launch_tool = LaunchBackgroundProcessTool(session_manager=sess_mgr)
+        manage_tool = ManageBackgroundProcessTool(session_manager=sess_mgr)
+
+        # 1. Launch a background command that runs for a few seconds
+        cmd = 'python -c "import time; print(\'SERVER_STARTED\'); time.sleep(10)"'
+        launch_res = await launch_tool.execute(
+            {"command": cmd, "wait_seconds": 0.5, "log_file": "test_server.log"},
+            context={"working_directory": str(tmp_path)},
+        )
+        assert launch_res.success
+        sid = launch_res.data["session_id"]
+        pid = launch_res.data["pid"]
+        assert sid is not None
+        assert pid is not None
+        assert launch_res.data["running"] is True
+
+        # 2. Inspect status
+        status_res = await manage_tool.execute({"session_id": sid, "action": "status"}, context={})
+        assert status_res.success
+        assert status_res.data["status"] == "running"
+
+        # 3. Stop process
+        stop_res = await manage_tool.execute({"session_id": sid, "action": "stop"}, context={})
+        assert stop_res.success
+        assert stop_res.data["stopped"] is True
+
+
+@pytest.mark.asyncio
+async def test_ast_grep_tool_structural_search():
+    """Verify ast_grep locates functions and decorators via standard library AST."""
+    tool = ASTStructuralSearchTool()
+    # Search for functions with decorator pytest.mark.asyncio
+    res = await tool.execute(
+        {"node_type": "FunctionDef", "decorator": "pytest.mark.asyncio", "limit": 10},
+        context={"working_directory": str(Path.cwd())},
+    )
+    assert res.success
+    matches = res.data["matches"]
+    assert len(matches) > 0
+    # Every match must have file, name, line, and decorators
+    first = matches[0]
+    assert "file" in first
+    assert "name" in first
+    assert "line" in first
+    assert any("asyncio" in d for d in first["decorators"])
+
+
+@pytest.mark.asyncio
+async def test_code_graph_query_tool_callers_and_declarations():
+    """Verify code_graph_query traces caller-callee and declaration relationships."""
+    tool = CodeGraphQueryTool()
+    # Query declarations
+    res_decl = await tool.execute(
+        {"query_type": "declarations", "target": "ASTCodeParser"},
+        context={"working_directory": str(Path.cwd())},
+    )
+    assert res_decl.success
+    assert res_decl.data["count"] >= 1
+    assert any(m["name"] == "ASTCodeParser" for m in res_decl.data["results"])
+
+    # Query callers
+    res_call = await tool.execute(
+        {"query_type": "callers", "target": "execute"},
+        context={"working_directory": str(Path.cwd())},
+    )
+    assert res_call.success
+    assert "results" in res_call.data
+
+
 # 6. Public exports
 __all__ = [
     "test_deliberation_tracking_in_orchestrator",
@@ -248,4 +334,7 @@ __all__ = [
     "test_project_environment_tool_nodejs_scaffold",
     "test_open_browser_tool",
     "test_git_diff_tool",
+    "test_background_session_tools_lifecycle",
+    "test_ast_grep_tool_structural_search",
+    "test_code_graph_query_tool_callers_and_declarations",
 ]

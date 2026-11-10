@@ -28,6 +28,67 @@ class CodeKnowledgeGraph(BaseModel):
     nodes: list[GraphNode] = Field(default_factory=list)
     edges: list[GraphEdge] = Field(default_factory=list)
 
+    def find_callers(self, target_name: str) -> list[dict[str, Any]]:
+        """Find all caller symbols and files that invoke a target function or method."""
+        target_lower = target_name.lower()
+        matches = []
+        for e in self.edges:
+            if e.rel_type == "CALLS":
+                # Match target in call target id (e.g. call:target_name)
+                if target_lower in e.target_id.lower():
+                    source_node = next((n for n in self.nodes if n.id == e.source_id), None)
+                    matches.append({
+                        "caller_id": e.source_id,
+                        "caller_name": source_node.properties.get("name") if source_node else e.source_id,
+                        "file": source_node.properties.get("file") if source_node else "-",
+                        "target_called": e.target_id.replace("call:", ""),
+                    })
+        return matches
+
+    def find_callees(self, caller_name: str) -> list[dict[str, Any]]:
+        """Find all functions/methods called by a given caller symbol."""
+        caller_lower = caller_name.lower()
+        matches = []
+        for e in self.edges:
+            if e.rel_type == "CALLS":
+                if caller_lower in e.source_id.lower():
+                    matches.append({
+                        "caller_id": e.source_id,
+                        "called_target": e.target_id.replace("call:", ""),
+                    })
+        return matches
+
+    def find_imports(self, target_module: str = "") -> list[dict[str, Any]]:
+        """Find file dependencies and imported packages."""
+        mod_lower = target_module.lower()
+        matches = []
+        for e in self.edges:
+            if e.rel_type == "IMPORTS":
+                if not mod_lower or mod_lower in e.target_id.lower() or mod_lower in e.source_id.lower():
+                    matches.append({
+                        "file": e.source_id.replace("file:", ""),
+                        "imported_package": e.target_id.replace("pkg:", ""),
+                    })
+        return matches
+
+    def find_declarations(self, name_filter: str = "", kind: str = "") -> list[dict[str, Any]]:
+        """Find declared classes, functions, or methods in the graph."""
+        n_lower = name_filter.lower()
+        k_lower = kind.lower()
+        results = []
+        for n in self.nodes:
+            if n.label == "Symbol":
+                name = n.properties.get("name", "")
+                k = n.properties.get("kind", "")
+                if (not n_lower or n_lower in name.lower()) and (not k_lower or k_lower == k.lower()):
+                    results.append({
+                        "id": n.id,
+                        "name": name,
+                        "kind": k,
+                        "file": n.properties.get("file", "-"),
+                    })
+        return results
+
 # 5. Core logic / classes / functions
 class ProjectGraphBuilder:
     """Constructs architectural knowledge graph from files, symbols, imports, and calls."""

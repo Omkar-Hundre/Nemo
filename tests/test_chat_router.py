@@ -7,7 +7,7 @@
 # (None)
 
 # 3. Local / internal imports
-from nemo.cli.chat import is_native_command
+from nemo.cli.chat import is_action_intent, is_native_command
 
 # 4. Types, Protocols, Schemas
 # (None)
@@ -32,9 +32,25 @@ def test_deterministic_command_routing():
     assert not is_native_command("task refactor authentication module")
 
 
+def test_action_intent_routing():
+    """Verify operational instructions trigger agent task workflow instead of plain chat."""
+    assert is_action_intent("initialize this project")
+    assert is_action_intent("init workspace")
+    assert is_action_intent("setup react project with tailwind")
+    assert is_action_intent("start dev server")
+    assert is_action_intent("launch vite app")
+    assert is_action_intent("install required packages")
+
+    # Pure conversational queries should not trigger action intent
+    assert not is_action_intent("what does this project do?")
+    assert not is_action_intent("explain the database design")
+    assert not is_action_intent("hello there")
+
+
 def main():
     print("Running chat REPL deterministic router verification...")
     test_deterministic_command_routing()
+    test_action_intent_routing()
     print("✓ Chat REPL deterministic command routing checks passed!")
 
 
@@ -42,5 +58,5 @@ if __name__ == "__main__":
     main()
 
 # 6. Public exports
-__all__ = ["test_deterministic_command_routing"]
+__all__ = ["test_deterministic_command_routing", "test_action_intent_routing"]
 

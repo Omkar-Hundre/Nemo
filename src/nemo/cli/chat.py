@@ -28,6 +28,11 @@ KNOWN_NATIVE_PREFIXES = (
     "get-content", "get-date", "set-location",
 )
 
+ACTION_INTENT_PREFIXES = (
+    "initialize", "init ", "start ", "launch ", "setup ",
+    "scaffold ", "install ", "build ", "run dev", "run start",
+)
+
 # 5. Core logic / classes / functions
 console = Console()
 
@@ -36,6 +41,12 @@ def is_native_command(line: str) -> bool:
     """Deterministic detection of shell commands to avoid LLM token overhead."""
     first_token = line.strip().split()[0].lower() if line.strip() else ""
     return first_token in KNOWN_NATIVE_PREFIXES
+
+
+def is_action_intent(text: str) -> bool:
+    """Detect if natural language instruction intends operational execution."""
+    t = text.lower().strip()
+    return any(t.startswith(prefix) for prefix in ACTION_INTENT_PREFIXES)
 
 
 async def run_interactive_chat() -> None:
@@ -103,14 +114,21 @@ async def run_interactive_chat() -> None:
             console.print(f"[green]Remembered [dim]({item.id[:8]})[/dim]:[/green] {item.content}")
             continue
 
-        # Autonomous task trigger
-        if user_input.lower().startswith("task "):
-            goal = user_input[5:].strip()
-            console.print(f"[bold cyan]Executing autonomous task:[/bold cyan] {goal}")
-            state = await orchestrator.run(objective=goal, working_directory=curr_dir)
+        # Autonomous operational task trigger (explicit 'task <...>' or detected operational action intent)
+        is_task_cmd = user_input.lower().startswith("task ")
+        if is_task_cmd or is_action_intent(user_input):
+            goal = user_input[5:].strip() if is_task_cmd else user_input
+            console.print(f"[bold cyan]Executing operational action:[/bold cyan] {goal}")
+            with console.status("[bold green]Deliberating and executing..."):
+                state = await orchestrator.run(objective=goal, working_directory=curr_dir)
             for rec in state.tool_history:
                 icon = "[green]✓[/green]" if rec["success"] else "[red]✗[/red]"
-                console.print(f" {icon} [cyan]{rec['tool']}[/cyan] [dim]{rec['arguments']}[/dim]")
+                thought_str = f" | [italic dim]{rec['thought'][:50]}...[/italic dim]" if rec.get("thought") else ""
+                console.print(f" {icon} [cyan]{rec['tool']}[/cyan] [dim]{rec['arguments']}[/dim]{thought_str}")
+            if state.verification_results:
+                for v in state.verification_results:
+                    v_icon = "[green]✓[/green]" if v["verified"] else "[red]✗[/red]"
+                    console.print(f" {v_icon} [{v['ground_truth_source']}] {v['details']}")
             console.print(f"\n{state.final_answer or 'Completed.'}\n")
             continue
 
@@ -138,5 +156,5 @@ async def run_interactive_chat() -> None:
             console.print(f"[bold red]Inference error: {exc}[/bold red]")
 
 # 6. Public exports
-__all__ = ["run_interactive_chat", "is_native_command", "KNOWN_NATIVE_PREFIXES"]
+__all__ = ["run_interactive_chat", "is_native_command", "is_action_intent", "KNOWN_NATIVE_PREFIXES", "ACTION_INTENT_PREFIXES"]
 
