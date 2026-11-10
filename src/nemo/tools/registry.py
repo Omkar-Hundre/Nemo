@@ -15,15 +15,23 @@ from nemo.tools.builtin import (
     CodebaseSummaryTool,
     CodeGraphQueryTool,
     CodeSearchTool,
+    DocumentGeneratorTool,
+    DocumentReaderTool,
+    EnvConfigInspectorTool,
+    FindFilesTool,
     GitDiffTool,
+    HttpProbeTool,
     IDEOpenTool,
     LaunchBackgroundProcessTool,
     ListDirectoryTool,
     ManageBackgroundProcessTool,
     MemoryRecallTool,
     OpenBrowserTool,
+    PortManagerTool,
+    PresentationGeneratorTool,
     ProjectEnvironmentTool,
     ReadFileTool,
+    ScaffoldProjectTool,
     SemanticSearchTool,
     SymbolLookupTool,
     TerminalTool,
@@ -59,11 +67,21 @@ class ToolRegistry:
         self.register(ReadFileTool())
         self.register(WriteFileTool(policy=self.policy))
         self.register(ListDirectoryTool())
+        self.register(FindFilesTool())
         self.register(GitDiffTool())
         self.register(OpenBrowserTool())
 
-        # 3. Environment, Memory & IDE integration
+        # 3. Environment, Network, Scaffolding & Process Management
         self.register(ProjectEnvironmentTool())
+        self.register(HttpProbeTool())
+        self.register(PortManagerTool())
+        self.register(ScaffoldProjectTool())
+        self.register(EnvConfigInspectorTool())
+
+        # 4. Documents, Presentations & Memory & IDE integration
+        self.register(DocumentReaderTool())
+        self.register(DocumentGeneratorTool())
+        self.register(PresentationGeneratorTool())
         self.register(MemoryRecallTool())
         self.register(IDEOpenTool())
 

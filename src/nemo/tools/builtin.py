@@ -3,13 +3,19 @@
 # 1. Standard library imports
 import ast
 import asyncio
+import csv
+import json
 from pathlib import Path
 import socket
+import subprocess
+import time
 from typing import Any
 import webbrowser
 
 # 2. Third-party imports
-# (None)
+import docx
+import httpx
+import pypdf
 
 # 3. Local / internal imports
 from nemo.ai.embeddings import NvidiaEmbeddingProvider, cosine_similarity
@@ -847,6 +853,887 @@ class CodeGraphQueryTool(BaseTool):
             },
         )
 
+
+class HttpProbeTool(BaseTool):
+    """Probe an HTTP/HTTPS endpoint to verify service health, response code, and latency."""
+    name = "http_probe"
+    description = "Send an HTTP request to local or remote endpoint to verify server readiness, response code, latency, and body snippet."
+    risk_level = RiskLevel.L0
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Target endpoint URL (e.g. 'http://localhost:5173')."},
+                    "method": {"type": "string", "enum": ["GET", "POST", "HEAD"], "description": "HTTP method (default 'GET')."},
+                    "timeout_seconds": {"type": "number", "description": "Request timeout in seconds (default 5.0)."},
+                    "expected_status": {"type": "integer", "description": "Optional expected status code (e.g. 200)."},
+                },
+                "required": ["url"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        url = arguments.get("url", "").strip()
+        method = arguments.get("method", "GET").upper()
+        timeout = float(arguments.get("timeout_seconds", 5.0))
+        expected_status = arguments.get("expected_status")
+
+        if not url:
+            return ToolResult(success=False, error="URL argument is required")
+
+        start_time = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+                response = await client.request(method=method, url=url)
+                latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+
+                is_expected = (response.status_code == expected_status) if expected_status else response.is_success
+                preview = response.text[:1200]
+
+                return ToolResult(
+                    success=is_expected,
+                    data={
+                        "url": str(response.url),
+                        "status_code": response.status_code,
+                        "latency_ms": latency_ms,
+                        "is_success": response.is_success,
+                        "content_type": response.headers.get("content-type", ""),
+                        "preview": preview,
+                    },
+                    error=None if is_expected else f"Expected status {expected_status}, got {response.status_code}",
+                )
+        except httpx.ConnectError:
+            return ToolResult(
+                success=False,
+                error=f"Connection refused at {url}. The server may not be listening on this port yet or has exited.",
+            )
+        except httpx.TimeoutException:
+            return ToolResult(
+                success=False,
+                error=f"Request to {url} timed out after {timeout} seconds.",
+            )
+        except Exception as exc:
+            return ToolResult(success=False, error=f"HTTP probe failed: {exc}")
+
+
+class PortManagerTool(BaseTool):
+    """Inspect listening network ports on Windows or terminate occupant processes."""
+    name = "port_manager"
+    description = "Inspect listening TCP ports on Windows to locate process ownership (PID, image name), or terminate occupant processes holding a port."
+    risk_level = RiskLevel.L2
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["inspect", "kill_occupant"],
+                        "description": "'inspect' identifies process holding the port; 'kill_occupant' forcefully terminates the process tree.",
+                    },
+                    "port": {"type": "integer", "description": "Target TCP port number (e.g. 3000, 5173, 8000)."},
+                },
+                "required": ["action", "port"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    def _get_process_name(self, pid: int) -> str:
+        try:
+            res = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                timeout=3.0,
+            )
+            line = res.stdout.strip()
+            if line and not line.startswith("INFO:"):
+                return line.split(",")[0].strip('"')
+        except Exception:
+            pass
+        return "unknown"
+
+    def _find_port_owner(self, port: int) -> dict[str, Any] | None:
+        try:
+            res = subprocess.run(
+                ["netstat", "-ano", "-p", "tcp"],
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+            )
+            for line in res.stdout.splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 5 and parts[0].upper() == "TCP":
+                    local_addr = parts[1]
+                    state = parts[3]
+                    pid_str = parts[4]
+                    if local_addr.endswith(f":{port}") and pid_str.isdigit():
+                        pid = int(pid_str)
+                        if pid == 0:
+                            continue
+                        proc_name = self._get_process_name(pid)
+                        return {
+                            "port": port,
+                            "pid": pid,
+                            "state": state,
+                            "process_name": proc_name,
+                            "local_address": local_addr,
+                        }
+        except Exception:
+            pass
+        return None
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        action = arguments.get("action", "inspect")
+        port = int(arguments.get("port", 0))
+
+        if port <= 0 or port > 65535:
+            return ToolResult(success=False, error=f"Invalid port: {port}")
+
+        owner = self._find_port_owner(port)
+
+        if action == "inspect":
+            if owner:
+                return ToolResult(
+                    success=True,
+                    data={"in_use": True, **owner},
+                )
+            return ToolResult(
+                success=True,
+                data={"in_use": False, "port": port, "message": f"Port {port} is free and not in use."},
+            )
+
+        if action == "kill_occupant":
+            if not owner:
+                return ToolResult(
+                    success=True,
+                    data={"port": port, "killed": False, "message": f"No active process found holding port {port}."},
+                )
+            pid = owner["pid"]
+            try:
+                res = subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5.0,
+                )
+                killed = (res.returncode == 0)
+                return ToolResult(
+                    success=killed,
+                    data={
+                        "port": port,
+                        "killed": killed,
+                        "pid": pid,
+                        "process_name": owner["process_name"],
+                        "output": res.stdout.strip() or res.stderr.strip(),
+                    },
+                    error=None if killed else f"Failed to terminate PID {pid}: {res.stderr.strip()}",
+                )
+            except Exception as exc:
+                return ToolResult(success=False, error=f"taskkill failed: {exc}")
+
+        return ToolResult(success=False, error=f"Unknown action: '{action}'")
+
+
+class FindFilesTool(BaseTool):
+    """Recursively search workspace directory for files matching glob patterns."""
+    name = "find_files"
+    description = "Search workspace recursively for files matching glob pattern (e.g. '**/*.config.*', '**/package.json', '**/*.py') with automatic exclusion of build/venv directories."
+    risk_level = RiskLevel.L0
+
+    EXCLUDED_DIRS = {".git", ".venv", "node_modules", "dist", "build", "__pycache__", ".pytest_cache", ".next", ".turbo"}
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string", "description": "Glob pattern (e.g. '**/*.config.*', '**/package.json', '**/*.env*')."},
+                    "path": {"type": "string", "description": "Root path to search from (default '.')."},
+                    "limit": {"type": "integer", "description": "Maximum matches to return (default 50)."},
+                },
+                "required": ["pattern"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        pattern = arguments.get("pattern", "*").strip()
+        path_arg = arguments.get("path", ".")
+        limit = int(arguments.get("limit", 50))
+
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        root = (base_dir / path_arg).resolve()
+
+        if not root.exists():
+            return ToolResult(success=False, error=f"Directory does not exist: {root}")
+
+        matches = []
+        try:
+            for item in root.glob(pattern):
+                if any(part in self.EXCLUDED_DIRS for part in item.parts):
+                    continue
+                matches.append({
+                    "path": str(item.relative_to(root)).replace("\\", "/"),
+                    "size_bytes": item.stat().st_size if item.is_file() else 0,
+                    "is_directory": item.is_dir(),
+                })
+                if len(matches) >= limit:
+                    break
+
+            return ToolResult(
+                success=True,
+                data={
+                    "pattern": pattern,
+                    "search_root": str(root),
+                    "count": len(matches),
+                    "matches": matches,
+                },
+            )
+        except Exception as exc:
+            return ToolResult(success=False, error=f"File search failed: {exc}")
+
+
+class ScaffoldProjectTool(BaseTool):
+    """Scaffold a new project tech stack non-interactively without prompt hanging."""
+    name = "scaffold_project"
+    description = "Scaffold a new project (e.g. 'react-ts', 'react', 'vue-ts', 'vue', 'nextjs', 'fastapi', 'node') non-interactively with guaranteed non-hanging parameters."
+    risk_level = RiskLevel.L2
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "template": {
+                        "type": "string",
+                        "enum": ["react-ts", "react", "vue-ts", "vue", "nextjs", "fastapi", "node"],
+                        "description": "Tech stack template identifier.",
+                    },
+                    "project_name": {"type": "string", "description": "Target project / folder name (e.g. 'frontend', 'my-app')."},
+                    "path": {"type": "string", "description": "Parent directory where project will be created (default '.')."},
+                    "install_dependencies": {"type": "boolean", "description": "Whether to automatically install dependencies after scaffolding (default true)."},
+                },
+                "required": ["template", "project_name"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        template = arguments.get("template", "react-ts")
+        project_name = arguments.get("project_name", "app").strip()
+        path_arg = arguments.get("path", ".")
+        install_deps = arguments.get("install_dependencies", True)
+
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        parent_dir = (base_dir / path_arg).resolve()
+        target_dir = parent_dir / project_name
+
+        if target_dir.exists() and any(target_dir.iterdir()):
+            return ToolResult(success=False, error=f"Target directory '{target_dir}' already exists and is not empty.")
+
+        executor = NativeSubprocessExecutor()
+
+        try:
+            if template in ("react-ts", "react", "vue-ts", "vue"):
+                cmd = f"npm create vite@latest {project_name} -- --template {template}"
+                scaffold_res = await executor.execute(cmd, cwd=str(parent_dir), timeout_seconds=60.0)
+                if not scaffold_res.is_success:
+                    return ToolResult(success=False, error=f"Vite scaffolding failed: {scaffold_res.stderr or scaffold_res.stdout}")
+
+                if install_deps:
+                    install_res = await executor.execute("npm install", cwd=str(target_dir), timeout_seconds=180.0)
+                    if not install_res.is_success:
+                        return ToolResult(success=False, error=f"npm install failed: {install_res.stderr or install_res.stdout}")
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "template": template,
+                        "project_name": project_name,
+                        "path": str(target_dir),
+                        "dev_command": "npm run dev",
+                        "default_url": "http://localhost:5173",
+                        "dependencies_installed": install_deps,
+                    },
+                )
+
+            elif template == "nextjs":
+                cmd = f"npx -y create-next-app@latest {project_name} --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --use-npm --no-turbopack --yes"
+                scaffold_res = await executor.execute(cmd, cwd=str(parent_dir), timeout_seconds=180.0)
+                if not scaffold_res.is_success:
+                    return ToolResult(success=False, error=f"Next.js scaffolding failed: {scaffold_res.stderr or scaffold_res.stdout}")
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "template": template,
+                        "project_name": project_name,
+                        "path": str(target_dir),
+                        "dev_command": "npm run dev",
+                        "default_url": "http://localhost:3000",
+                        "dependencies_installed": True,
+                    },
+                )
+
+            elif template == "fastapi":
+                target_dir.mkdir(parents=True, exist_ok=True)
+                pyproject = target_dir / "pyproject.toml"
+                pyproject.write_text(
+                    f'[project]\nname = "{project_name}"\nversion = "0.1.0"\ndependencies = [\n    "fastapi>=0.115.0",\n    "uvicorn[standard]>=0.30.0",\n]\n',
+                    encoding="utf-8",
+                )
+                main_py = target_dir / "main.py"
+                main_py.write_text(
+                    'from fastapi import FastAPI\n\napp = FastAPI(title="' + project_name + '")\n\n@app.get("/")\ndef read_root():\n    return {"status": "ok", "project": "' + project_name + '"}\n',
+                    encoding="utf-8",
+                )
+                gitignore = target_dir / ".gitignore"
+                gitignore.write_text(".venv/\n__pycache__/\n*.pyc\n.env\n", encoding="utf-8")
+
+                if install_deps:
+                    await executor.execute("python -m venv .venv", cwd=str(target_dir), timeout_seconds=30.0)
+                    venv_pip = target_dir / ".venv" / "Scripts" / "pip.exe"
+                    if venv_pip.exists():
+                        await executor.execute(f'"{venv_pip}" install fastapi "uvicorn[standard]"', cwd=str(target_dir), timeout_seconds=120.0)
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "template": template,
+                        "project_name": project_name,
+                        "path": str(target_dir),
+                        "dev_command": "uvicorn main:app --reload --port 8000",
+                        "default_url": "http://localhost:8000",
+                        "dependencies_installed": install_deps,
+                    },
+                )
+
+            elif template == "node":
+                target_dir.mkdir(parents=True, exist_ok=True)
+                init_res = await executor.execute("npm init -y", cwd=str(target_dir), timeout_seconds=30.0)
+                if not init_res.is_success:
+                    return ToolResult(success=False, error=f"npm init failed: {init_res.stderr or init_res.stdout}")
+                index_js = target_dir / "index.js"
+                index_js.write_text('console.log("Hello from ' + project_name + '");\n', encoding="utf-8")
+                return ToolResult(
+                    success=True,
+                    data={
+                        "template": template,
+                        "project_name": project_name,
+                        "path": str(target_dir),
+                        "dev_command": "node index.js",
+                        "dependencies_installed": False,
+                    },
+                )
+
+            else:
+                return ToolResult(success=False, error=f"Unsupported template: '{template}'")
+
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Scaffolding failed: {exc}")
+
+
+class EnvConfigInspectorTool(BaseTool):
+    """Inspect and validate environment variables and secrets configuration."""
+    name = "inspect_env_config"
+    description = "Compare .env against .env.example/template to detect missing variables, unpopulated placeholder defaults, and format issues without exposing secrets."
+    risk_level = RiskLevel.L0
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Project directory (default '.')."},
+                    "example_file": {"type": "string", "description": "Template filename (default '.env.example')."},
+                    "target_file": {"type": "string", "description": "Target environment filename (default '.env')."},
+                },
+            },
+            risk_level=self.risk_level,
+        )
+
+    def _parse_env_keys(self, file_path: Path) -> dict[str, str]:
+        keys = {}
+        if not file_path.exists():
+            return keys
+        for line in file_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                key, val = line.split("=", 1)
+                keys[key.strip()] = val.strip()
+        return keys
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        root = (base_dir / arguments.get("path", ".")).resolve()
+        example_name = arguments.get("example_file", ".env.example")
+        target_name = arguments.get("target_file", ".env")
+
+        example_file = root / example_name
+        if not example_file.exists():
+            for alt in [".env.template", ".env.sample", "example.env"]:
+                if (root / alt).exists():
+                    example_file = root / alt
+                    break
+
+        target_file = root / target_name
+
+        if not example_file.exists() and not target_file.exists():
+            return ToolResult(
+                success=True,
+                data={"has_env": False, "message": "No .env or .env.example files detected."},
+            )
+
+        example_keys = self._parse_env_keys(example_file)
+        target_keys = self._parse_env_keys(target_file)
+
+        missing_keys = [k for k in example_keys if k not in target_keys]
+        placeholders = {"change_me", "your_key", "your_api_key", "todo", "replace_me", ""}
+        unpopulated = [k for k, v in target_keys.items() if v.lower().strip("\"'") in placeholders]
+
+        return ToolResult(
+            success=True,
+            data={
+                "target_file_exists": target_file.exists(),
+                "example_file_exists": example_file.exists(),
+                "configured_keys_count": len(target_keys),
+                "required_keys_count": len(example_keys),
+                "missing_keys": missing_keys,
+                "unpopulated_keys": unpopulated,
+                "is_healthy": (len(missing_keys) == 0 and len(unpopulated) == 0 and target_file.exists()),
+            },
+        )
+
+
+class DocumentReaderTool(BaseTool):
+    """Extract and read structured text from PDF, DOCX, CSV, Markdown, and text files."""
+    name = "read_document"
+    description = "Read and extract text, tables, and metadata from documents (.pdf, .docx, .csv, .tsv, .md, .txt, .json)."
+    risk_level = RiskLevel.L0
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path to document file."},
+                    "max_pages": {"type": "integer", "description": "Maximum pages to extract from PDF (default 25)."},
+                    "max_rows": {"type": "integer", "description": "Maximum rows to preview from CSV (default 50)."},
+                },
+                "required": ["path"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        doc_path = (base_dir / arguments.get("path", "")).resolve()
+        max_pages = int(arguments.get("max_pages", 25))
+        max_rows = int(arguments.get("max_rows", 50))
+
+        if not doc_path.exists():
+            return ToolResult(success=False, error=f"Document file does not exist: {doc_path}")
+
+        ext = doc_path.suffix.lower()
+
+        try:
+            if ext == ".pdf":
+                reader = pypdf.PdfReader(str(doc_path))
+                total_pages = len(reader.pages)
+                pages_to_read = min(total_pages, max_pages)
+                extracted_pages = []
+                for idx in range(pages_to_read):
+                    text = reader.pages[idx].extract_text() or ""
+                    extracted_pages.append(f"--- Page {idx + 1} ---\n{text}")
+                return ToolResult(
+                    success=True,
+                    data={
+                        "format": "pdf",
+                        "total_pages": total_pages,
+                        "pages_extracted": pages_to_read,
+                        "content": "\n\n".join(extracted_pages),
+                    },
+                )
+
+            elif ext == ".docx":
+                doc = docx.Document(str(doc_path))
+                paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+                tables_data = []
+                for t in doc.tables[:5]:
+                    table_rows = []
+                    for row in t.rows[:10]:
+                        table_rows.append([cell.text.strip() for cell in row.cells])
+                    tables_data.append(table_rows)
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "format": "docx",
+                        "paragraph_count": len(paragraphs),
+                        "table_count": len(doc.tables),
+                        "content": "\n\n".join(paragraphs),
+                        "tables_preview": tables_data,
+                    },
+                )
+
+            elif ext in (".csv", ".tsv"):
+                delimiter = "\t" if ext == ".tsv" else ","
+                rows = []
+                with open(doc_path, "r", encoding="utf-8", errors="ignore") as f:
+                    csv_reader = csv.reader(f, delimiter=delimiter)
+                    for idx, row in enumerate(csv_reader):
+                        if idx >= max_rows:
+                            break
+                        rows.append(row)
+                header = rows[0] if rows else []
+                return ToolResult(
+                    success=True,
+                    data={
+                        "format": "csv",
+                        "headers": header,
+                        "preview_row_count": len(rows),
+                        "rows": rows,
+                    },
+                )
+
+            elif ext in (".md", ".txt", ".json", ".yaml", ".yml", ".html", ".rst"):
+                text = doc_path.read_text(encoding="utf-8", errors="ignore")
+                return ToolResult(
+                    success=True,
+                    data={
+                        "format": ext.lstrip("."),
+                        "size_bytes": len(text),
+                        "content": text[:15000],
+                    },
+                )
+
+            else:
+                return ToolResult(success=False, error=f"Unsupported document format: '{ext}'")
+
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Failed to read document: {exc}")
+
+
+class DocumentGeneratorTool(BaseTool):
+    """Generate structured documents in DOCX, Markdown, or styled HTML report formats."""
+    name = "generate_document"
+    description = "Generate a formatted document (.docx, .html, or .md) with title, structured sections, bullet points, and clean styling."
+    risk_level = RiskLevel.L1
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Output file path (e.g. 'docs/architecture_report.docx' or 'report.html')."},
+                    "title": {"type": "string", "description": "Document title."},
+                    "format": {"type": "string", "enum": ["docx", "html", "markdown"], "description": "Output format ('docx', 'html', 'markdown')."},
+                    "sections": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "heading": {"type": "string"},
+                                "body": {"type": "string"},
+                                "bullets": {"type": "array", "items": {"type": "string"}},
+                            },
+                            "required": ["heading"],
+                        },
+                        "description": "Structured sections of the document.",
+                    },
+                    "content": {"type": "string", "description": "Optional raw markdown content if sections are not provided."},
+                },
+                "required": ["path", "title", "format"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        out_path = (base_dir / arguments.get("path", "")).resolve()
+        title = arguments.get("title", "Document")
+        doc_format = arguments.get("format", "markdown").lower()
+        sections = arguments.get("sections", [])
+        raw_content = arguments.get("content", "")
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            if doc_format == "docx":
+                doc = docx.Document()
+                doc.add_heading(title, level=0)
+
+                if sections:
+                    for sec in sections:
+                        doc.add_heading(sec.get("heading", ""), level=1)
+                        if sec.get("body"):
+                            doc.add_paragraph(sec["body"])
+                        for bullet in sec.get("bullets", []):
+                            doc.add_paragraph(bullet, style="List Bullet")
+                elif raw_content:
+                    for line in raw_content.splitlines():
+                        if line.startswith("# "):
+                            doc.add_heading(line[2:], level=1)
+                        elif line.startswith("## "):
+                            doc.add_heading(line[3:], level=2)
+                        elif line.startswith("- "):
+                            doc.add_paragraph(line[2:], style="List Bullet")
+                        elif line.strip():
+                            doc.add_paragraph(line)
+
+                doc.save(str(out_path))
+
+            elif doc_format == "html":
+                body_parts = [f"<h1>{title}</h1>"]
+                if sections:
+                    for sec in sections:
+                        body_parts.append(f"<h2>{sec.get('heading', '')}</h2>")
+                        if sec.get("body"):
+                            body_parts.append(f"<p>{sec['body']}</p>")
+                        if sec.get("bullets"):
+                            body_parts.append("<ul>")
+                            for b in sec["bullets"]:
+                                body_parts.append(f"<li>{b}</li>")
+                            body_parts.append("</ul>")
+                elif raw_content:
+                    body_parts.append(f"<pre style='white-space: pre-wrap;'>{raw_content}</pre>")
+
+                html_doc = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>
+body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; max-width: 860px; margin: 40px auto; padding: 0 20px; color: #1e293b; background: #ffffff; }}
+h1 {{ color: #0f172a; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 24px; }}
+h2 {{ color: #1e293b; margin-top: 32px; border-bottom: 1px solid #f1f5f9; padding-bottom: 8px; }}
+p {{ margin-bottom: 16px; color: #334155; }}
+ul {{ margin-bottom: 16px; padding-left: 24px; }}
+li {{ margin-bottom: 6px; color: #334155; }}
+pre {{ background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 16px; font-size: 14px; overflow-x: auto; }}
+</style>
+</head>
+<body>
+{''.join(body_parts)}
+</body>
+</html>"""
+                out_path.write_text(html_doc, encoding="utf-8")
+
+            elif doc_format == "markdown":
+                md_lines = [f"# {title}\n"]
+                if sections:
+                    for sec in sections:
+                        md_lines.append(f"## {sec.get('heading', '')}\n")
+                        if sec.get("body"):
+                            md_lines.append(f"{sec['body']}\n")
+                        for b in sec.get("bullets", []):
+                            md_lines.append(f"- {b}")
+                        md_lines.append("")
+                elif raw_content:
+                    md_lines.append(raw_content)
+
+                out_path.write_text("\n".join(md_lines), encoding="utf-8")
+
+            return ToolResult(
+                success=True,
+                data={
+                    "path": str(out_path),
+                    "format": doc_format,
+                    "title": title,
+                    "size_bytes": out_path.stat().st_size,
+                },
+            )
+
+        except Exception as exc:
+            return ToolResult(success=False, error=f"Document generation failed: {exc}")
+
+
+class PresentationGeneratorTool(BaseTool):
+    """Generate standalone responsive HTML slide presentations with keyboard navigation."""
+    name = "generate_presentation"
+    description = "Generate an interactive, standalone HTML presentation with keyboard arrow navigation, fullscreen support, and professional dark/light styling."
+    risk_level = RiskLevel.L1
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Output HTML filepath (e.g. 'presentation.html')."},
+                    "title": {"type": "string", "description": "Presentation title."},
+                    "subtitle": {"type": "string", "description": "Optional presentation subtitle."},
+                    "theme": {"type": "string", "enum": ["dark", "light"], "description": "Color theme (default 'dark')."},
+                    "slides": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "bullets": {"type": "array", "items": {"type": "string"}},
+                                "content": {"type": "string"},
+                                "code": {"type": "string"},
+                            },
+                            "required": ["title"],
+                        },
+                        "description": "List of slide objects.",
+                    },
+                },
+                "required": ["path", "title", "slides"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        out_path = (base_dir / arguments.get("path", "presentation.html")).resolve()
+        title = arguments.get("title", "Presentation")
+        subtitle = arguments.get("subtitle", "")
+        theme = arguments.get("theme", "dark")
+        slides = arguments.get("slides", [])
+
+        if not slides:
+            return ToolResult(success=False, error="At least one slide is required")
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        is_dark = (theme == "dark")
+        bg_color = "#0b0f19" if is_dark else "#f8fafc"
+        card_bg = "#111827" if is_dark else "#ffffff"
+        text_color = "#f9fafb" if is_dark else "#0f172a"
+        sub_color = "#94a3b8" if is_dark else "#475569"
+        accent_color = "#38bdf8" if is_dark else "#0284c7"
+        border_color = "#1e293b" if is_dark else "#e2e8f0"
+
+        slides_html = []
+        # Title slide
+        slides_html.append(f"""
+        <div class="slide active">
+            <h1 class="main-title">{title}</h1>
+            {f'<p class="subtitle">{subtitle}</p>' if subtitle else ''}
+            <div class="nav-hint">Press → or Space to navigate</div>
+        </div>
+        """)
+
+        for s in slides:
+            s_title = s.get("title", "")
+            bullets_html = ""
+            if s.get("bullets"):
+                bullets_html = "<ul>" + "".join(f"<li>{b}</li>" for b in s["bullets"]) + "</ul>"
+            content_html = f"<p class='slide-text'>{s['content']}</p>" if s.get("content") else ""
+            code_html = f"<pre><code>{s['code']}</code></pre>" if s.get("code") else ""
+
+            slides_html.append(f"""
+            <div class="slide">
+                <h2 class="slide-heading">{s_title}</h2>
+                <div class="slide-body">
+                    {content_html}
+                    {bullets_html}
+                    {code_html}
+                </div>
+            </div>
+            """)
+
+        full_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title>
+<style>
+* {{ box-sizing: border-box; margin: 0; padding: 0; }}
+body {{ background: {bg_color}; color: {text_color}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }}
+.progress-bar {{ height: 4px; background: {accent_color}; width: 0%; transition: width 0.3s ease; }}
+.deck-container {{ flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px; position: relative; }}
+.slide {{ display: none; width: 100%; max-width: 960px; min-height: 520px; background: {card_bg}; border: 1px solid {border_color}; border-radius: 16px; padding: 60px; box-shadow: 0 20px 40px rgba(0,0,0,0.3); flex-direction: column; justify-content: center; animation: fadeIn 0.3s ease; }}
+.slide.active {{ display: flex; }}
+@keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(10px); }} to {{ opacity: 1; transform: translateY(0); }} }}
+.main-title {{ font-size: 52px; font-weight: 800; color: {accent_color}; margin-bottom: 16px; letter-spacing: -1px; }}
+.subtitle {{ font-size: 24px; color: {sub_color}; margin-bottom: 32px; }}
+.slide-heading {{ font-size: 38px; font-weight: 700; color: {accent_color}; margin-bottom: 24px; border-bottom: 2px solid {border_color}; padding-bottom: 12px; }}
+.slide-body {{ font-size: 20px; line-height: 1.6; color: {text_color}; }}
+.slide-text {{ margin-bottom: 20px; color: {sub_color}; }}
+ul {{ list-style: square; padding-left: 32px; margin-bottom: 24px; }}
+li {{ margin-bottom: 12px; }}
+pre {{ background: #000; border: 1px solid {border_color}; border-radius: 8px; padding: 20px; font-family: monospace; font-size: 16px; color: #38bdf8; overflow-x: auto; margin-top: 20px; }}
+.footer-bar {{ height: 50px; display: flex; align-items: center; justify-content: space-between; padding: 0 40px; border-top: 1px solid {border_color}; font-size: 14px; color: {sub_color}; }}
+.nav-hint {{ font-size: 14px; color: {sub_color}; margin-top: 20px; }}
+</style>
+</head>
+<body>
+<div class="progress-bar" id="progress"></div>
+<div class="deck-container">
+{''.join(slides_html)}
+</div>
+<div class="footer-bar">
+    <span id="title-footer">{title}</span>
+    <span id="counter">1 / {len(slides_html)}</span>
+    <span>Use ← / → or Space | 'F' for Fullscreen</span>
+</div>
+<script>
+let current = 0;
+const slides = document.querySelectorAll('.slide');
+const total = slides.length;
+const counter = document.getElementById('counter');
+const progress = document.getElementById('progress');
+
+function showSlide(idx) {{
+    if (idx < 0 || idx >= total) return;
+    slides[current].classList.remove('active');
+    current = idx;
+    slides[current].classList.add('active');
+    counter.textContent = (current + 1) + ' / ' + total;
+    progress.style.width = (((current + 1) / total) * 100) + '%';
+}}
+
+window.addEventListener('keydown', (e) => {{
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {{
+        showSlide(current + 1);
+    }} else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {{
+        showSlide(current - 1);
+    }} else if (e.key === 'f' || e.key === 'F') {{
+        if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+        else document.exitFullscreen();
+    }}
+}});
+showSlide(0);
+</script>
+</body>
+</html>"""
+        out_path.write_text(full_html, encoding="utf-8")
+
+        return ToolResult(
+            success=True,
+            data={
+                "path": str(out_path),
+                "slide_count": len(slides_html),
+                "open_command": f"open_browser(url='file:///{out_path.as_posix()}')",
+            },
+        )
+
 # 6. Public exports
 __all__ = [
     "CodebaseSummaryTool",
@@ -866,4 +1753,12 @@ __all__ = [
     "ManageBackgroundProcessTool",
     "ASTStructuralSearchTool",
     "CodeGraphQueryTool",
+    "HttpProbeTool",
+    "PortManagerTool",
+    "FindFilesTool",
+    "ScaffoldProjectTool",
+    "EnvConfigInspectorTool",
+    "DocumentReaderTool",
+    "DocumentGeneratorTool",
+    "PresentationGeneratorTool",
 ]

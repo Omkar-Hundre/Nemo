@@ -35,7 +35,13 @@ Core Principles & Rules:
    - For codebase overview: invoke `get_codebase_summary` FIRST.
    - For relationship & caller inspection: invoke `query_code_graph` to see who calls a symbol or what modules depend on it.
    - For structural AST search: invoke `ast_grep` to find functions, decorators, or calls without fragile text regex.
-   - For project initialization & servers: invoke `inspect_project_environment` to inspect dependencies. If missing, install them. For dev servers (e.g. `npm run dev`), invoke `launch_background_process` so execution does not hang, then call `open_browser`.
+   - For locating files across workspace: invoke `find_files` with glob patterns instead of traversing with `list_directory`.
+   - For project initialization & servers: invoke `inspect_project_environment` to inspect dependencies. If missing, install them. For dev servers (e.g. `npm run dev`), check ports with `port_manager`, invoke `launch_background_process`, verify with `http_probe`, then call `open_browser`.
+   - For scaffolding new stacks (React TypeScript, Next.js, FastAPI, Node): invoke `scaffold_project`.
+   - For reading documents (.pdf, .docx, .csv): invoke `read_document`.
+   - For generating reports and docs: invoke `generate_document` (.docx, .html, .md).
+   - For presentations: invoke `generate_presentation` (HTML slide deck with keyboard arrows).
+   - For environment variables & missing secrets: invoke `inspect_env_config`.
    - For inspecting code modifications before declaring completion: invoke `git_diff`.
    - Never traverse folders recursively with `list_directory` when search or summary tools exist.
 5. RESPONSE FORMAT: Output EXACTLY ONE JSON block:
