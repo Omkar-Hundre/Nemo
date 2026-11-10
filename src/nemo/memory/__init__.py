@@ -17,3 +17,4 @@ from nemo.memory.repository import MemoryRepository, ProjectRepository
 
 # 6. Public exports
 __all__ = ["MemoryRepository", "ProjectRepository"]
+

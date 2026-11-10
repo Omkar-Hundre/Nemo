@@ -20,6 +20,8 @@ from nemo.config.settings import get_settings
 from nemo.database.connection import init_db, resolve_database_url
 from nemo.execution.sessions.manager import SessionManager
 from nemo.execution.shells.native import NativeSubprocessExecutor
+from nemo.intelligence.indexer import ProjectIndexer
+from nemo.integrations.ide.registry import IDERegistry
 from nemo.memory.repository import MemoryRepository, ProjectRepository
 
 # 4. Types, Protocols, Schemas
@@ -43,15 +45,26 @@ project_app = typer.Typer(
     name="project",
     help="Register and inspect workspace projects.",
 )
+index_app = typer.Typer(
+    name="index",
+    help="Scan, hash, and incrementally index project codebases.",
+)
+ide_app = typer.Typer(
+    name="ide",
+    help="Detect and coordinate with code editors (Antigravity, VS Code).",
+)
 
 app.add_typer(sessions_app, name="sessions")
 app.add_typer(memory_app, name="memory")
 app.add_typer(project_app, name="project")
+app.add_typer(index_app, name="index")
+app.add_typer(ide_app, name="ide")
 
 console = Console()
 session_mgr = SessionManager()
 memory_repo = MemoryRepository()
 project_repo = ProjectRepository()
+ide_registry = IDERegistry()
 
 
 @app.command()
@@ -125,6 +138,7 @@ def run(
         sys.exit(result.exit_code)
 
 
+# --- Sessions Commands ---
 @sessions_app.command("create")
 def create_session(
     shell: str = typer.Option("powershell", "--shell", "-s", help="Shell type (powershell, cmd, bash)."),
@@ -298,6 +312,93 @@ def project_list() -> None:
         table.add_row(p.id[:8], p.name, p.root_path)
 
     console.print(table)
+
+
+# --- Indexing Commands ---
+@index_app.callback(invoke_without_command=True)
+def index_default(
+    ctx: typer.Context,
+    path: str = typer.Argument(".", help="Workspace directory to index."),
+    force: bool = typer.Option(False, "--force", "-f", help="Force complete re-indexing without hash cache."),
+) -> None:
+    """Scan and incrementally index codebase."""
+    if ctx.invoked_subcommand is not None:
+        return
+
+    target = Path(path).resolve()
+    if not target.exists():
+        console.print(f"[bold red]Path does not exist: {target}[/bold red]")
+        sys.exit(1)
+
+    indexer = ProjectIndexer(target)
+    with console.status(f"[bold cyan]Indexing {target.name}..."):
+        report = indexer.run_index(force=force)
+
+    table = Table(title=f"Indexing Report: {target.name}", border_style="bright_blue")
+    table.add_column("Metric", style="bold white", width=20)
+    table.add_column("Value", style="cyan")
+
+    table.add_row("Total Files", str(report.total_files))
+    table.add_row("Indexed / Changed", f"[green]{report.indexed_files}[/green]")
+    table.add_row("Skipped (Unchanged)", f"[yellow]{report.skipped_files}[/yellow]")
+    table.add_row("Duration", f"{report.duration_ms} ms")
+    if report.languages:
+        langs_str = ", ".join(f"{lang} ({cnt})" for lang, cnt in sorted(report.languages.items()))
+        table.add_row("Languages", langs_str)
+
+    console.print(table)
+
+
+# --- IDE Commands ---
+@ide_app.command("list")
+def ide_list() -> None:
+    """Detect and list supported IDEs on Windows."""
+    adapters = asyncio.run(ide_registry.list_available())
+    table = Table(title="Supported IDEs", border_style="bright_blue")
+    table.add_column("Editor", style="bold cyan", width=15)
+    table.add_column("Status", width=12)
+    table.add_column("Executable Path", style="dim white")
+
+    for ad in adapters:
+        status_text = "[green]INSTALLED[/green]" if ad["detected"] else "[dim]NOT FOUND[/dim]"
+        table.add_row(ad["name"].capitalize(), status_text, ad["executable"] or "-")
+
+    console.print(table)
+
+
+@ide_app.command("open")
+def ide_open(
+    path: str = typer.Argument(".", help="Project directory or registered name."),
+    editor: str | None = typer.Option(None, "--editor", "-e", help="Specific editor (antigravity, vscode)."),
+) -> None:
+    """Launch IDE with target project workspace."""
+    target_path = Path(path).resolve()
+    success = asyncio.run(ide_registry.open_project(target_path, preferred_ide=editor))
+    if success:
+        console.print(f"[green]Opened workspace in IDE: {target_path}[/green]")
+    else:
+        console.print(f"[bold red]Failed to open workspace in IDE ({editor or 'default'}).[/bold red]")
+        sys.exit(1)
+
+
+@ide_app.command("open-file")
+def ide_open_file(
+    file: str = typer.Argument(..., help="Path to file to open."),
+    line: int | None = typer.Option(None, "--line", "-l", help="Target line number."),
+    editor: str | None = typer.Option(None, "--editor", "-e", help="Specific editor (antigravity, vscode)."),
+) -> None:
+    """Open specific file in IDE, optionally at line."""
+    target_file = Path(file).resolve()
+    if not target_file.exists():
+        console.print(f"[bold red]File does not exist: {target_file}[/bold red]")
+        sys.exit(1)
+
+    success = asyncio.run(ide_registry.open_file(target_file, line=line, preferred_ide=editor))
+    if success:
+        console.print(f"[green]Opened {target_file.name}:{line or 1}[/green]")
+    else:
+        console.print(f"[bold red]Failed to open file in IDE.[/bold red]")
+        sys.exit(1)
 
 
 @app.command()
