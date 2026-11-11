@@ -3426,6 +3426,9 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                             "paint_draw",
                             "draw_shape",
                             "draw_in_paint",
+                            "open_youtube",
+                            "youtube",
+                            "play_youtube",
                             "record_audio",
                             "sound_recorder",
                             "terminal_layout",
@@ -3468,6 +3471,8 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                     "path": {"type": "string", "description": "Target or destination file path (for audio playback, camera snapshot, recording, paint markup)."},
                     "volume": {"type": "integer", "description": "Audio playback volume from 0 to 100 (default 70) (for 'play_audio')."},
                     "search": {"type": "string", "description": "Search keyword to find music/audio files in system to play (for 'play_audio')."},
+                    "query": {"type": "string", "description": "Search query or song name to open and play directly on YouTube (for 'open_youtube')."},
+                    "song": {"type": "string", "description": "Song name or artist for audio or YouTube playback."},
                     "duration_seconds": {"type": "integer", "description": "Audio recording duration in seconds (default 10) (for 'record_audio')."},
                     "panes": {"type": "array", "items": {"type": "string"}, "description": "List of pane names/commands for Windows Terminal multi-pane layout."},
                     "directory": {"type": "string", "description": "Starting working directory for terminal panes (for 'terminal_layout')."},
@@ -3846,6 +3851,13 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
 
             elif action == "open_in_paint":
                 path_arg = arguments.get("path") or arguments.get("file")
+                if path_arg and str(path_arg).lower().endswith(".svg"):
+                    return ToolResult(
+                        success=False,
+                        error="Microsoft Paint is a bitmap editor and cannot open .svg vector files. "
+                              "To draw shapes or art on the Paint canvas, use desktop_integration "
+                              "with action='paint_draw', shape='hut' (or 'square', 'circle', 'triangle_over', etc.).",
+                    )
                 target_file = None
                 if path_arg:
                     p = Path(context.get("working_directory", Path.cwd())) / path_arg
@@ -3885,6 +3897,35 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                     },
                 )
 
+            elif action in ("open_youtube", "youtube", "play_youtube"):
+                query = arguments.get("query") or arguments.get("search") or arguments.get("song") or ""
+                import urllib.parse
+                if query:
+                    url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
+                else:
+                    url = "https://www.youtube.com"
+
+                chrome_candidates = [
+                    Path(os.environ.get("PROGRAMFILES", "C:\\Program Files")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+                    Path(os.environ.get("PROGRAMFILES(X86)", "C:\\Program Files (x86)")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+                    Path.home() / "AppData" / "Local" / "Google" / "Chrome" / "Application" / "chrome.exe",
+                ]
+                chrome_exe = next((str(p) for p in chrome_candidates if p.exists()), None)
+                if chrome_exe:
+                    subprocess.Popen([chrome_exe, url])
+                else:
+                    webbrowser.open(url)
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "open_youtube",
+                        "query": query,
+                        "url": url,
+                        "note": f"YouTube opened for '{query or 'homepage'}'.",
+                    },
+                )
+
             elif action in ("paint_draw", "draw_shape", "draw_in_paint"):
                 shape = str(arguments.get("shape") or "square").lower().strip()
                 size = int(arguments.get("size") or 240)
@@ -3905,23 +3946,45 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                 if win32gui:
                     def _find_paint(h, _):
                         nonlocal paint_hwnd
-                        if win32gui.IsWindowVisible(h):
-                            txt = win32gui.GetWindowText(h)
-                            cls = win32gui.GetClassName(h)
-                            if "paint" in txt.lower() or cls == "MSPaintApp":
-                                paint_hwnd = h
-                    win32gui.EnumWindows(_find_paint, None)
+                        try:
+                            if win32gui.IsWindowVisible(h):
+                                txt = win32gui.GetWindowText(h)
+                                cls = win32gui.GetClassName(h)
+                                if "paint" in txt.lower() or cls == "MSPaintApp":
+                                    paint_hwnd = h
+                        except Exception:
+                            pass
+                        return True
+                    try:
+                        win32gui.EnumWindows(_find_paint, None)
+                    except Exception:
+                        pass
 
                 if not paint_hwnd:
                     subprocess.Popen(["cmd.exe", "/c", "start", "mspaint.exe"], shell=False)
                     await asyncio.sleep(2.0)
                     if win32gui:
-                        win32gui.EnumWindows(_find_paint, None)
+                        try:
+                            win32gui.EnumWindows(_find_paint, None)
+                        except Exception:
+                            pass
 
                 if paint_hwnd and win32gui:
                     try:
                         win32gui.ShowWindow(paint_hwnd, win32con.SW_RESTORE)
-                        win32gui.SetForegroundWindow(paint_hwnd)
+                        win32gui.SetWindowPos(paint_hwnd, win32con.HWND_TOP, 0, 0, 0, 0, win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
+                        try:
+                            win32api.keybd_event(18, 0, 0, 0)
+                            win32gui.SetForegroundWindow(paint_hwnd)
+                            win32api.keybd_event(18, 0, 2, 0)
+                        except Exception:
+                            pass
+                        if win32api:
+                            try:
+                                win32api.keybd_event(27, 0, 0, 0)
+                                win32api.keybd_event(27, 0, 2, 0)
+                            except Exception:
+                                pass
                         await asyncio.sleep(0.4)
                         rect = win32gui.GetWindowRect(paint_hwnd)
                         w_left, w_top, w_right, w_bottom = rect
@@ -4562,10 +4625,31 @@ class WindowsGuiTool(BaseTool):
             elif action == "launch":
                 if not target:
                     return ToolResult(success=False, error="target parameter is required for 'launch' action.")
-                proc = subprocess.Popen(target, shell=True)
+                t_lower = target.lower().strip()
+                cmd = target
+                if t_lower in ("chrome", "google chrome", "google-chrome"):
+                    chrome_candidates = [
+                        Path(os.environ.get("PROGRAMFILES", "C:\\Program Files")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+                        Path(os.environ.get("PROGRAMFILES(X86)", "C:\\Program Files (x86)")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+                        Path.home() / "AppData" / "Local" / "Google" / "Chrome" / "Application" / "chrome.exe",
+                    ]
+                    c_exe = next((str(p) for p in chrome_candidates if p.exists()), None)
+                    cmd = f'"{c_exe}"' if c_exe else "start chrome"
+                elif t_lower in ("edge", "msedge"):
+                    cmd = "start msedge"
+                elif t_lower in ("paint", "mspaint"):
+                    cmd = "start mspaint"
+                elif t_lower in ("notepad",):
+                    cmd = "notepad.exe"
+                elif t_lower in ("calculator", "calc"):
+                    cmd = "calc.exe"
+                elif t_lower.startswith(("http://", "https://")):
+                    cmd = f"start {target}"
+
+                proc = subprocess.Popen(cmd, shell=True)
                 return ToolResult(
                     success=True,
-                    data={"action": "launch", "target": target, "pid": proc.pid},
+                    data={"action": "launch", "target": target, "command": cmd, "pid": proc.pid},
                 )
 
             elif action in ("focus", "minimize", "maximize", "restore", "close"):
@@ -4593,15 +4677,24 @@ class WindowsGuiTool(BaseTool):
                 )
 
             elif action == "type_keys":
-                if not target:
-                    return ToolResult(success=False, error="target window title is required for 'type_keys' action.")
                 keys = arguments.get("keys", "")
                 if not keys:
                     return ToolResult(success=False, error="keys parameter is required for 'type_keys' action.")
 
-                win = self._find_window(target)
+                win = None
+                if target:
+                    win = self._find_window(target)
+                else:
+                    try:
+                        fg = win32gui.GetForegroundWindow() if win32gui else None
+                        if fg:
+                            fg_title = win32gui.GetWindowText(fg)
+                            win = self._find_window(fg_title)
+                    except Exception:
+                        pass
+
                 if not win:
-                    return ToolResult(success=False, error=f"No window found matching '{target}'.")
+                    return ToolResult(success=False, error=f"No window found matching '{target or 'foreground'}'.")
 
                 win.set_focus()
                 win.type_keys(keys, with_spaces=True)
@@ -4611,15 +4704,24 @@ class WindowsGuiTool(BaseTool):
                 )
 
             elif action == "click":
-                if not target:
-                    return ToolResult(success=False, error="target window title is required for 'click' action.")
                 ctrl_query = arguments.get("control", "").strip().lower()
                 if not ctrl_query:
                     return ToolResult(success=False, error="control parameter is required for 'click' action.")
 
-                win = self._find_window(target)
+                win = None
+                if target:
+                    win = self._find_window(target)
+                else:
+                    try:
+                        fg = win32gui.GetForegroundWindow() if win32gui else None
+                        if fg:
+                            fg_title = win32gui.GetWindowText(fg)
+                            win = self._find_window(fg_title)
+                    except Exception:
+                        pass
+
                 if not win:
-                    return ToolResult(success=False, error=f"No window found matching '{target}'.")
+                    return ToolResult(success=False, error=f"No window found matching '{target or 'foreground'}'.")
 
                 target_ctrl = None
                 for c in win.descendants():

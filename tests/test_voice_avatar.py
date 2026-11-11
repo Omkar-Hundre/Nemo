@@ -156,3 +156,23 @@ class TestPaintDrawTool:
             res_tri = await tool.execute({"action": "paint_draw", "shape": "triangle_over", "size": 200}, {})
             assert res_tri.success is True
             assert res_tri.data["shape"] == "triangle_over"
+
+    @pytest.mark.asyncio
+    async def test_paint_rejects_svg(self):
+        tool = WindowsDesktopTool()
+        res = await tool.execute({"action": "open_in_paint", "path": "test_hut.svg"}, {})
+        assert res.success is False
+        assert "cannot open .svg" in res.error
+        assert "paint_draw" in res.error
+
+    @pytest.mark.asyncio
+    async def test_open_youtube(self):
+        tool = WindowsDesktopTool()
+        with patch("subprocess.Popen") as mock_popen, patch("webbrowser.open") as mock_wb:
+            mock_proc = MagicMock()
+            mock_proc.pid = 1234
+            mock_popen.return_value = mock_proc
+
+            res = await tool.execute({"action": "open_youtube", "query": "lofi hip hop"}, {})
+            assert res.success is True
+            assert "results?search_query=lofi" in res.data["url"]
