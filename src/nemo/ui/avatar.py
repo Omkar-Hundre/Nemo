@@ -229,3 +229,4 @@ class NemoAvatarWindow:
                         self.window.show()
             except Exception as e:
                 logger.debug("Fullscreen check failed: %s", e)
+

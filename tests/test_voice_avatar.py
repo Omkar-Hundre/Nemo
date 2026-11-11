@@ -126,3 +126,4 @@ class TestAvatarWindowApi:
 
         api.toggle_voice(True)
         on_voice.assert_called_with(True)
+

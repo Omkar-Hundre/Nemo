@@ -180,3 +180,4 @@ class NemoVoiceService:
     def _on_queue_tasks_updated(self, tasks: list[dict[str, Any]]) -> None:
         """Relay task queue list updates to process manager GUI."""
         self.avatar.update_tasks(tasks)
+

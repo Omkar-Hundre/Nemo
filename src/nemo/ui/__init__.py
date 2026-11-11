@@ -3,3 +3,4 @@
 from nemo.ui.avatar import NemoAvatarWindow, NemoJsApi
 
 __all__ = ["NemoAvatarWindow", "NemoJsApi"]
+

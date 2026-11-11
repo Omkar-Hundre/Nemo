@@ -15,3 +15,4 @@ __all__ = [
     "is_autostart_enabled",
     "set_autostart",
 ]
+

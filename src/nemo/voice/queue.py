@@ -191,3 +191,4 @@ class IdempotentTaskQueue:
             # Send latest 15 tasks
             recent = [t.to_dict() for t in self.tasks[-15:]]
             self.on_tasks_updated(recent)
+
