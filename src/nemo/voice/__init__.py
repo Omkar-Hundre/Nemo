@@ -3,10 +3,12 @@
 from nemo.voice.audio import AudioCaptureService
 from nemo.voice.autostart import is_autostart_enabled, set_autostart
 from nemo.voice.engine import WhisperVoiceEngine
+from nemo.voice.panel import ActionPanelPill
 from nemo.voice.queue import IdempotentTaskQueue, NemoTask
 from nemo.voice.service import NemoVoiceService
 
 __all__ = [
+    "ActionPanelPill",
     "AudioCaptureService",
     "WhisperVoiceEngine",
     "IdempotentTaskQueue",
@@ -15,4 +17,3 @@ __all__ = [
     "is_autostart_enabled",
     "set_autostart",
 ]
-

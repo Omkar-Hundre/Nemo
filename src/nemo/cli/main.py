@@ -1105,9 +1105,10 @@ def voice_avatar_cmd(
     model: str = typer.Option("base.en", "--model", "-m", help="Local Whisper model (tiny.en, base.en)."),
     autostart: bool = typer.Option(False, "--autostart", "-a", help="Enable automatic launch on Windows boot."),
     disable_autostart: bool = typer.Option(False, "--disable-autostart", help="Disable launch on Windows boot."),
-    no_mic: bool = typer.Option(False, "--no-mic", help="Run floating avatar and GUI without microphone listener."),
+    no_panel: bool = typer.Option(False, "--no-panel", help="Run in terminal without taskbar action pill."),
+    no_mic: bool = typer.Option(False, "--no-mic", help="Run without microphone listener."),
 ) -> None:
-    """Launch Nemo animated desktop avatar, hands-free voice listener, and process controller."""
+    """Launch Nemo hands-free voice assistant with taskbar action panel pill."""
     from nemo.voice.autostart import set_autostart, is_autostart_enabled
     from nemo.voice.service import NemoVoiceService
 
@@ -1121,18 +1122,17 @@ def voice_avatar_cmd(
         console.print("[bold green]Nemo desktop voice auto-start enabled on Windows boot.[/bold green]")
 
     console.print(Panel(
-        f"[bold cyan]Nemo Desktop Voice & Process Controller[/bold cyan]\n"
+        f"[bold cyan]Nemo Hands-Free Voice Assistant[/bold cyan]\n"
         f"• [bold]Whisper Engine:[/bold] Local {model} (INT8)\n"
         f"• [bold]Wake Word:[/bold] 'Nemo' / 'Hey Nemo'\n"
-        f"• [bold]Avatar:[/bold] Floating Finding Nemo Clownfish (Always-on-top)\n"
-        f"• [bold]Auto-Hide:[/bold] Enabled during fullscreen movies & gaming\n"
+        f"• [bold]Action Panel:[/bold] Minimal Taskbar Pill (Bottom-Right)\n"
         f"• [bold]Auto-Start:[/bold] {'[green]Enabled[/green]' if is_autostart_enabled() else '[dim]Disabled[/dim]'}\n\n"
-        f"[dim]Click Nemo or the status pill anytime to toggle the Process Controller GUI.[/dim]",
+        f"[dim]Simply speak 'Nemo, ...' anytime to execute commands.[/dim]",
         title="[bold green]NEMO OS Active[/bold green]",
         border_style="cyan",
     ))
 
-    service = NemoVoiceService(model_size=model, enable_voice=not no_mic)
+    service = NemoVoiceService(model_size=model, enable_voice=not no_mic, show_panel=not no_panel)
     try:
         service.start(block=True)
     except KeyboardInterrupt:

@@ -1,4 +1,4 @@
-"""Unit tests for Voice Daemon, Local Whisper Engine, and Floating Avatar UI."""
+"""Unit tests for Voice Daemon, Local Whisper Engine, and Action Panel Pill."""
 
 # 1. Standard library imports
 import asyncio
@@ -11,8 +11,8 @@ import pytest
 from nemo.voice.audio import AudioCaptureService
 from nemo.voice.autostart import is_autostart_enabled, set_autostart
 from nemo.voice.engine import WhisperVoiceEngine
+from nemo.voice.panel import ActionPanelPill
 from nemo.voice.queue import IdempotentTaskQueue, NemoTask
-from nemo.ui.avatar import NemoAvatarWindow, NemoJsApi
 
 
 class TestVoiceEngine:
@@ -44,8 +44,7 @@ class TestVoiceEngine:
 class TestIdempotentTaskQueue:
     def test_tier1_cancel_keywords(self):
         state_mock = MagicMock()
-        tasks_mock = MagicMock()
-        queue = IdempotentTaskQueue(on_state_change=state_mock, on_tasks_updated=tasks_mock)
+        queue = IdempotentTaskQueue(on_state_change=state_mock)
 
         result = queue.submit_command("stop")
         assert result is None
@@ -98,32 +97,14 @@ class TestAutostart:
         assert is_autostart_enabled() is False
 
 
-class TestAvatarWindowApi:
-    def test_js_api_delegation(self):
-        on_cmd = MagicMock()
-        on_cancel = MagicMock()
-        on_voice = MagicMock()
+class TestActionPanelPill:
+    def test_panel_initialization_and_colors(self):
+        pill = ActionPanelPill()
+        assert "idle" in pill.COLORS
+        assert "listening" in pill.COLORS
+        assert "working" in pill.COLORS
+        assert "completed" in pill.COLORS
 
-        avatar_mock = MagicMock()
-        api = NemoJsApi(
-            avatar_window=avatar_mock,
-            on_command=on_cmd,
-            on_cancel=on_cancel,
-            on_voice_toggle=on_voice,
-        )
-
-        api.expand_window()
-        avatar_mock.expand.assert_called_once()
-
-        api.collapse_window()
-        avatar_mock.collapse.assert_called_once()
-
-        api.execute_command("take a webcam snapshot")
-        on_cmd.assert_called_with("take a webcam snapshot")
-
-        api.cancel_task("task-123")
-        on_cancel.assert_called_with("task-123")
-
-        api.toggle_voice(True)
-        on_voice.assert_called_with(True)
-
+        # Check pill properties
+        assert pill.WIDTH == 280
+        assert pill.HEIGHT == 46

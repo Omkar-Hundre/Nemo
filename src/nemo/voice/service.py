@@ -1,4 +1,4 @@
-"""Unified Voice Daemon and Floating Avatar Service for Nemo."""
+"""Unified Voice Service and Taskbar Action Panel for Nemo."""
 
 # 1. Standard library imports
 import asyncio
@@ -8,29 +8,32 @@ import time
 from typing import Any
 
 # 2. Third-party imports
-# (None)
+from rich.console import Console
 
 # 3. Local imports
-from nemo.ui.avatar import NemoAvatarWindow
 from nemo.voice.audio import AudioCaptureService
-from nemo.voice.autostart import is_autostart_enabled, set_autostart
+from nemo.voice.autostart import set_autostart
 from nemo.voice.engine import WhisperVoiceEngine
+from nemo.voice.panel import ActionPanelPill
 from nemo.voice.queue import IdempotentTaskQueue
 
 logger = logging.getLogger(__name__)
+console = Console()
 
 
 class NemoVoiceService:
-    """Production operating layer coordinating local Whisper, task queue, and floating avatar."""
+    """Production voice operating layer coordinating local Whisper, task queue, and taskbar pill."""
 
     def __init__(
         self,
         model_size: str = "base.en",
         enable_voice: bool = True,
+        show_panel: bool = True,
         autostart: bool = False,
     ) -> None:
         self.enable_voice = enable_voice
         self.model_size = model_size
+        self.show_panel = show_panel
 
         if autostart:
             set_autostart(True)
@@ -43,17 +46,14 @@ class NemoVoiceService:
         self._wake_active_until = 0.0
         self.WAKE_WINDOW_SEC = 8.0
 
-        # Avatar Window Controller
-        self.avatar = NemoAvatarWindow(
-            on_command=self._on_user_command,
-            on_cancel=self._on_user_cancel,
-            on_voice_toggle=self._on_voice_toggle,
-        )
+        # Action Panel Pill (bottom-right taskbar area)
+        self.panel: ActionPanelPill | None = None
+        if self.show_panel:
+            self.panel = ActionPanelPill(on_cancel=self.stop)
 
         # Priority Task Queue
         self.task_queue = IdempotentTaskQueue(
             on_state_change=self._on_queue_state_change,
-            on_tasks_updated=self._on_queue_tasks_updated,
         )
 
         # Local Whisper Engine & Audio Capture
@@ -65,11 +65,11 @@ class NemoVoiceService:
                 self.engine = WhisperVoiceEngine(model_size=self.model_size)
                 self.audio = AudioCaptureService()
             except Exception as e:
-                logger.error("Failed to initialize voice components: %s", e)
+                console.print(f"[bold red]Failed to initialize voice components: {e}[/bold red]")
                 self.enable_voice = False
 
     def start(self, block: bool = True) -> None:
-        """Launch all background workers and open desktop avatar window."""
+        """Launch background workers and show the taskbar action pill."""
         # 1. Start dedicated asyncio event loop thread for task executions
         self._loop = asyncio.new_event_loop()
         self._loop_thread = threading.Thread(target=self._run_async_loop, daemon=True)
@@ -83,9 +83,17 @@ class NemoVoiceService:
             self.audio.start()
             self._speech_thread = threading.Thread(target=self._speech_worker_loop, daemon=True)
             self._speech_thread.start()
+            console.print("[bold green]Voice Listener Online.[/bold green] Say [bold cyan]'Nemo'[/bold cyan] to issue commands.")
 
-        # 4. Start avatar GUI on main thread
-        self.avatar.start(block=block)
+        # 4. Show minimal bottom-right Action Panel pill
+        if self.panel:
+            self.panel.start(block=block)
+        elif block:
+            try:
+                while not self._stop_event.is_set():
+                    time.sleep(0.5)
+            except KeyboardInterrupt:
+                self.stop()
 
     def stop(self) -> None:
         """Terminate all background threads and close UI."""
@@ -95,7 +103,8 @@ class NemoVoiceService:
         self.task_queue.stop_worker()
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
-        self.avatar.close()
+        if self.panel:
+            self.panel.stop()
 
     def _run_async_loop(self) -> None:
         """Runs background asyncio loop indefinitely."""
@@ -105,7 +114,6 @@ class NemoVoiceService:
 
     def _speech_worker_loop(self) -> None:
         """Continuous background listener consuming speech chunks from microphone."""
-        logger.info("Local Whisper listener loop active. Say 'Nemo' to trigger commands.")
         while not self._stop_event.is_set():
             if not self.enable_voice or not self.audio or not self.engine:
                 time.sleep(0.2)
@@ -118,66 +126,50 @@ class NemoVoiceService:
                 if 0.0 < self._wake_active_until < now:
                     self._wake_active_until = 0.0
                     if not self.task_queue._current_task:
-                        self.avatar.set_state("sleeping", "Nemo Resting")
+                        if self.panel:
+                            self.panel.update_status("idle", "Nemo Listening")
                 time.sleep(0.05)
                 continue
 
-            # Transcribe via faster-whisper
+            # Transcribe via local faster-whisper
             try:
                 text = self.engine.transcribe(chunk)
                 if not text:
                     continue
 
-                logger.info("Transcribed audio: '%s'", text)
                 has_wake, command = self.engine.parse_wake_word(text)
-
                 now = time.time()
                 is_currently_awake = (now < self._wake_active_until)
 
                 if has_wake:
                     self._wake_active_until = now + self.WAKE_WINDOW_SEC
-                    self.avatar.set_state("listening", "Listening...")
+                    console.print(f"[bold cyan][HEARD][/bold cyan] Wake word detected: '{text}'")
+                    if self.panel:
+                        self.panel.update_status("listening", "Hearing command...")
 
                     if command:
-                        logger.info("Executing voice command: '%s'", command)
+                        console.print(f"[bold green][VOICE TASK][/bold green] Executing: '{command}'")
                         self._wake_active_until = 0.0
                         self.task_queue.submit_command(command)
                 elif is_currently_awake and text.strip():
-                    logger.info("Executing follow-up voice command: '%s'", text)
+                    console.print(f"[bold green][VOICE TASK][/bold green] Follow-up command: '{text}'")
                     self._wake_active_until = 0.0
                     self.task_queue.submit_command(text)
 
             except Exception as e:
                 logger.error("Error transcribing speech chunk: %s", e)
 
-    def _on_user_command(self, cmd_text: str) -> None:
-        """Called when user types a command in GUI input box."""
-        logger.info("Received user manual command: '%s'", cmd_text)
-        self.task_queue.submit_command(cmd_text)
-
-    def _on_user_cancel(self, task_id: str) -> None:
-        """Called when user clicks stop button in GUI."""
-        logger.info("Received cancel request for task #%s", task_id)
-        self.task_queue.cancel_task(task_id)
-
-    def _on_voice_toggle(self, enabled: bool) -> None:
-        """Called when user toggles microphone button in GUI."""
-        logger.info("Voice recognition toggled: %s", enabled)
-        self.enable_voice = enabled
-        if enabled:
-            if self.audio:
-                self.audio.start()
-            self.avatar.set_state("sleeping", "Nemo Voice Active")
-        else:
-            if self.audio:
-                self.audio.stop()
-            self.avatar.set_state("sleeping", "Nemo (Voice Muted)")
-
     def _on_queue_state_change(self, state: str, message: str) -> None:
-        """Relay task queue state updates to avatar."""
-        self.avatar.set_state(state, message)
+        """Relay task queue state updates to taskbar action pill and console."""
+        pill_state = "idle"
+        if state == "working":
+            pill_state = "working"
+            console.print(f"[bold yellow]→ {message}[/bold yellow]")
+        elif "Complete" in message:
+            pill_state = "completed"
+            console.print(f"[bold green]✓ {message}[/bold green]")
+        elif state == "listening":
+            pill_state = "listening"
 
-    def _on_queue_tasks_updated(self, tasks: list[dict[str, Any]]) -> None:
-        """Relay task queue list updates to process manager GUI."""
-        self.avatar.update_tasks(tasks)
-
+        if self.panel:
+            self.panel.update_status(pill_state, message)
