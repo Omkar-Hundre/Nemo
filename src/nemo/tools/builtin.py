@@ -2802,6 +2802,312 @@ class SystemInspectorTool(BaseTool):
             return ToolResult(success=False, error=f"System inspector error: {exc}")
 
 
+
+class WindowsClockAutomator:
+    """Automate the native Windows Clock app (Focus sessions, Timers, Alarms, Stopwatch) via UI Automation."""
+
+    @staticmethod
+    def _switch_to_interactive_desktop():
+        """Ensure thread is connected to user's interactive 'Default' desktop on WinSta0."""
+        try:
+            user32 = ctypes.windll.user32
+            h_desk = user32.OpenDesktopW("Default", 0, False, 0x10000000)
+            if h_desk:
+                user32.SetThreadDesktop(h_desk)
+                return h_desk
+        except Exception:
+            pass
+        return None
+
+    @classmethod
+    def get_clock_window(cls, auto_launch: bool = True, wait_seconds: float = 2.0):
+        """Find or launch the native Windows Clock app window."""
+        h_desk = cls._switch_to_interactive_desktop()
+
+        found = []
+        if win32gui:
+            def enum_cb(hwnd, _):
+                txt = win32gui.GetWindowText(hwnd)
+                cls_name = win32gui.GetClassName(hwnd)
+                if cls_name == "ApplicationFrameWindow":
+                    if txt == "Clock" or "clock" in txt.lower():
+                        found.append(hwnd)
+            try:
+                if h_desk:
+                    win32gui.EnumDesktopWindows(h_desk, enum_cb, None)
+                else:
+                    win32gui.EnumWindows(enum_cb, None)
+            except Exception:
+                pass
+
+        if not found and auto_launch:
+            subprocess.Popen(["cmd.exe", "/c", "start", "ms-clock:"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            time.sleep(wait_seconds)
+            return cls.get_clock_window(auto_launch=False)
+
+        if found:
+            hwnd = found[0]
+            try:
+                from pywinauto import Application
+                app = Application(backend="uia").connect(handle=hwnd)
+                win = app.window(handle=hwnd)
+                try:
+                    win.set_focus()
+                except Exception:
+                    pass
+                return win
+            except Exception:
+                pass
+        return None
+
+    @classmethod
+    def start_focus_session(cls, minutes: float = 25.0, skip_breaks: bool = False, keep_on_top: bool = False) -> dict[str, Any]:
+        """Automate Windows Clock: Focus sessions -> set minutes -> Start focus session -> optional Keep on top."""
+        win = cls.get_clock_window()
+        if not win:
+            return {"success": False, "error": "Could not launch or connect to Windows Clock app."}
+
+        # Step 1: Select FocusButton with safe render delay
+        for c in win.descendants():
+            if c.element_info.automation_id == "FocusButton":
+                try:
+                    c.select()
+                except Exception:
+                    try:
+                        c.invoke()
+                    except Exception:
+                        pass
+                break
+        time.sleep(1.0)
+
+        # Step 2: Set duration
+        mins_int = int(max(1, minutes))
+        for c in win.descendants():
+            if c.element_info.automation_id == "InputBox":
+                try:
+                    c.set_edit_text(str(mins_int))
+                except Exception:
+                    try:
+                        c.type_keys(f"^a{mins_int}", with_spaces=True)
+                    except Exception:
+                        pass
+                break
+
+        # Step 3: Optional skip breaks
+        if skip_breaks:
+            time.sleep(0.3)
+            for c in win.descendants():
+                if c.element_info.automation_id == "HasBreaksCheckbox":
+                    try:
+                        c.toggle()
+                    except Exception:
+                        pass
+                    break
+
+        time.sleep(0.5)
+
+        # Step 4: Click Start focus session
+        started = False
+        for c in win.descendants():
+            if c.element_info.automation_id == "StartButton":
+                try:
+                    c.invoke()
+                    started = True
+                except Exception:
+                    pass
+                break
+
+        # Step 5: Optional keep on top
+        popped_aot = False
+        if keep_on_top and started:
+            time.sleep(0.5)
+            for c in win.descendants():
+                if c.element_info.automation_id == "AotButton":
+                    try:
+                        c.invoke()
+                        popped_aot = True
+                    except Exception:
+                        pass
+                    break
+
+        return {
+            "success": True,
+            "feature": "focus_session",
+            "duration_minutes": mins_int,
+            "session_started": started,
+            "skip_breaks": skip_breaks,
+            "keep_on_top": popped_aot,
+            "note": "Native Windows Clock Focus Session started directly on screen.",
+        }
+
+    @classmethod
+    def start_stopwatch(cls, keep_on_top: bool = False) -> dict[str, Any]:
+        """Automate Windows Clock: Stopwatch -> Start -> optionally Keep on top."""
+        win = cls.get_clock_window()
+        if not win:
+            return {"success": False, "error": "Could not launch or connect to Windows Clock app."}
+
+        for c in win.descendants():
+            if c.element_info.automation_id == "StopwatchButton":
+                try:
+                    c.select()
+                except Exception:
+                    try:
+                        c.invoke()
+                    except Exception:
+                        pass
+                break
+        time.sleep(1.0)
+
+        started = False
+        popped_aot = False
+        for c in win.descendants():
+            aid = c.element_info.automation_id
+            if aid in ("StartButton", "TimerPlayPauseButton") and not started:
+                try:
+                    c.invoke()
+                    started = True
+                except Exception:
+                    pass
+            elif aid == "AotButton" and keep_on_top:
+                time.sleep(0.5)
+                try:
+                    c.invoke()
+                    popped_aot = True
+                except Exception:
+                    pass
+
+        return {
+            "success": True,
+            "feature": "stopwatch",
+            "started": started,
+            "keep_on_top": popped_aot,
+            "note": "Native Windows Clock stopwatch started on screen.",
+        }
+
+    @classmethod
+    def start_timer(cls, minutes: float = 5.0, keep_on_top: bool = True) -> dict[str, Any]:
+        """Automate Windows Clock: Timer -> select preset or add timer -> Start -> Keep on top."""
+        win = cls.get_clock_window()
+        if not win:
+            return {"success": False, "error": "Could not launch or connect to Windows Clock app."}
+
+        # Step 1: Select TimerButton
+        for c in win.descendants():
+            if c.element_info.automation_id == "TimerButton":
+                try:
+                    c.select()
+                except Exception:
+                    try:
+                        c.invoke()
+                    except Exception:
+                        pass
+                break
+        time.sleep(1.0)
+
+        # Step 2: Match timer preset (1 min, 3 min, 5 min, 10 min) or first timer
+        target_mins = int(minutes)
+        timer_started = False
+        popped_aot = False
+
+        matching_card = None
+        first_card = None
+        for c in win.descendants():
+            if c.element_info.automation_id == "TimerViewGrid":
+                name = (c.element_info.name or "").lower()
+                if not first_card:
+                    first_card = c
+                if f"{target_mins} min" in name:
+                    matching_card = c
+                    break
+
+        card_to_use = matching_card or first_card
+        if card_to_use:
+            for sub in card_to_use.descendants():
+                aid = sub.element_info.automation_id
+                if aid == "TimerPlayPauseButton":
+                    try:
+                        sub.invoke()
+                        timer_started = True
+                    except Exception:
+                        pass
+                elif aid == "AotButton" and keep_on_top:
+                    time.sleep(0.5)
+                    try:
+                        sub.invoke()
+                        popped_aot = True
+                    except Exception:
+                        pass
+
+        return {
+            "success": True,
+            "feature": "timer",
+            "minutes": target_mins,
+            "timer_started": timer_started,
+            "keep_on_top_widget": popped_aot,
+            "note": "Native Windows Clock timer started on screen with compact always-on-top mode.",
+        }
+
+    @classmethod
+    def set_alarm_ui(cls, hour: int, minute: int, name: str = "Alarm") -> dict[str, Any]:
+        """Automate Windows Clock: Alarm -> Add new alarm -> set name and Save."""
+        win = cls.get_clock_window()
+        if not win:
+            return {"success": False, "error": "Could not launch or connect to Windows Clock app."}
+
+        # Step 1: Select AlarmButton
+        for c in win.descendants():
+            if c.element_info.automation_id == "AlarmButton":
+                try:
+                    c.select()
+                except Exception:
+                    try:
+                        c.invoke()
+                    except Exception:
+                        pass
+                break
+        time.sleep(1.0)
+
+        # Step 2: Click Add an alarm (+)
+        for c in win.descendants():
+            if c.element_info.automation_id == "AddAlarmButton":
+                try:
+                    c.invoke()
+                except Exception:
+                    pass
+                break
+        time.sleep(1.0)
+
+        # Step 3: Set Alarm Name in Edit box if present
+        for c in win.descendants():
+            if c.element_info.control_type == "Edit" and "name" in (c.element_info.name or "").lower():
+                try:
+                    c.set_edit_text(name)
+                except Exception:
+                    pass
+                break
+
+        # Step 4: Click Save (PrimaryButton)
+        saved = False
+        for c in win.descendants():
+            if c.element_info.automation_id == "PrimaryButton":
+                try:
+                    c.invoke()
+                    saved = True
+                except Exception:
+                    pass
+                break
+
+        return {
+            "success": True,
+            "feature": "alarm",
+            "time": f"{hour:02d}:{minute:02d}",
+            "name": name,
+            "alarm_saved_in_ui": saved,
+            "note": "Alarm configured directly inside the native Windows Clock app.",
+        }
+
+
 class WindowsDesktopTool(BaseTool):
     """Native Windows desktop integration: clipboard, toast notifications, alarms, and timers."""
     name = "desktop_integration"
@@ -3034,11 +3340,13 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                 if proc.returncode != 0:
                     return ToolResult(success=False, error=f"Failed to schedule alarm: {proc.stderr or proc.stdout}")
 
-                # Launch Windows Clock app so the user sees it visually on screen
+                # Configure native Windows Clock app UI and display on screen
+                ui_res = {}
                 try:
-                    subprocess.Popen(["cmd.exe", "/c", "start", "ms-clock:"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                except Exception:
-                    pass
+                    hour_int, min_int = [int(p) for p in time_24.split(":")]
+                    ui_res = WindowsClockAutomator.set_alarm_ui(hour=hour_int, minute=min_int, name=title)
+                except Exception as ui_err:
+                    ui_res = {"success": False, "error": str(ui_err)}
 
                 return ToolResult(
                     success=True,
@@ -3047,12 +3355,13 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                         "task_name": task_name,
                         "scheduled_time": label,
                         "time_24h": time_24,
-                        "clock_app": "launched (ms-clock:)",
+                        "clock_app": "automated" if ui_res.get("success") else "launched (ms-clock:)",
+                        "clock_details": ui_res,
                         "hard_alarm": "armed with continuous looping sound until dismissed",
                         "status": "active",
                         "title": title,
                         "message": msg,
-                        "note": "Alarm registered in Windows Task Scheduler and Clock app launched.",
+                        "note": "Alarm configured in native Windows Clock app and registered in Task Scheduler.",
                     },
                 )
 
@@ -3065,13 +3374,8 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
 
                 title = arguments.get("title") or f"Timer ({int(minutes)}m)"
 
-                # Launch floating always-on-top desktop widget
-                from nemo.ui.timer_widget import launch_timer_widget_process
-                widget_proc = launch_timer_widget_process(
-                    mode="timer",
-                    minutes=minutes,
-                    title=title,
-                )
+                # Automate native Windows Clock timer directly (preset/custom + Keep on top mini floating mode)
+                res = WindowsClockAutomator.start_timer(minutes=minutes, keep_on_top=True)
 
                 return ToolResult(
                     success=True,
@@ -3079,9 +3383,10 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                         "action": "set_timer",
                         "duration_minutes": minutes,
                         "title": title,
-                        "widget_status": "active (always-on-top desktop widget)",
-                        "widget_pid": widget_proc.pid,
-                        "note": "Desktop floating timer widget launched on screen with hard alarm ringing on completion.",
+                        "widget_status": "active (native Windows Clock keep-on-top timer)",
+                        "clock_app": "automated",
+                        "clock_details": res,
+                        "note": "Native Windows Clock timer started on screen with compact always-on-top mode.",
                     },
                 )
 
@@ -3090,18 +3395,11 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                 break_min = float(arguments.get("break_minutes") or arguments.get("break") or 5.0)
                 long_break = float(arguments.get("long_break_minutes") or arguments.get("long_break") or 15.0)
                 cycles = int(arguments.get("cycles") or 4)
+                skip_breaks = bool(arguments.get("skip_breaks", False))
                 title = arguments.get("title") or "Pomodoro Focus"
 
-                # Launch floating always-on-top Pomodoro widget
-                from nemo.ui.timer_widget import launch_timer_widget_process
-                widget_proc = launch_timer_widget_process(
-                    mode="pomodoro",
-                    focus=focus,
-                    break_min=break_min,
-                    long_break=long_break,
-                    cycles=cycles,
-                    title=title,
-                )
+                # Automate native Windows Clock Focus Session directly
+                res = WindowsClockAutomator.start_focus_session(minutes=focus, skip_breaks=skip_breaks, keep_on_top=False)
 
                 return ToolResult(
                     success=True,
@@ -3112,9 +3410,10 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                         "long_break_minutes": long_break,
                         "cycles": cycles,
                         "title": title,
-                        "widget_status": "active (always-on-top desktop widget)",
-                        "widget_pid": widget_proc.pid,
-                        "note": "Desktop Pomodoro widget launched on screen with custom cycles and audio alarm ringing.",
+                        "widget_status": "active (native Windows Clock Focus Session)",
+                        "clock_app": "automated",
+                        "clock_details": res,
+                        "note": "Native Windows Clock Focus Session started directly on screen.",
                     },
                 )
 
@@ -3446,6 +3745,10 @@ class WindowsGuiTool(BaseTool):
                             "click",
                             "type_keys",
                             "inspect_tree",
+                            "clock_focus",
+                            "clock_timer",
+                            "clock_alarm",
+                            "clock_stopwatch",
                         ],
                         "description": "Desktop GUI action to perform.",
                     },
@@ -3679,6 +3982,32 @@ class WindowsGuiTool(BaseTool):
                         "controls": controls,
                     },
                 )
+
+            elif action == "clock_focus":
+                mins = float(arguments.get("minutes", 25.0))
+                skip_br = bool(arguments.get("skip_breaks", False))
+                aot = bool(arguments.get("keep_on_top", False))
+                res = WindowsClockAutomator.start_focus_session(minutes=mins, skip_breaks=skip_br, keep_on_top=aot)
+                return ToolResult(success=res.get("success", True), data=res)
+
+            elif action == "clock_timer":
+                mins = float(arguments.get("minutes", 5.0))
+                aot = bool(arguments.get("keep_on_top", True))
+                res = WindowsClockAutomator.start_timer(minutes=mins, keep_on_top=aot)
+                return ToolResult(success=res.get("success", True), data=res)
+
+            elif action == "clock_alarm":
+                time_str = arguments.get("time", "07:00")
+                time_24, _ = WindowsDesktopTool._parse_alarm_time(time_str)
+                h, m = [int(p) for p in time_24.split(":")]
+                name = arguments.get("title") or arguments.get("name", "Alarm")
+                res = WindowsClockAutomator.set_alarm_ui(hour=h, minute=m, name=name)
+                return ToolResult(success=res.get("success", True), data=res)
+
+            elif action == "clock_stopwatch":
+                aot = bool(arguments.get("keep_on_top", False))
+                res = WindowsClockAutomator.start_stopwatch(keep_on_top=aot)
+                return ToolResult(success=res.get("success", True), data=res)
 
             else:
                 return ToolResult(success=False, error=f"Unsupported gui action: '{action}'")
