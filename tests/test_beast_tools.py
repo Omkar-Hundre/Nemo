@@ -548,6 +548,45 @@ async def test_desktop_integration_toast_notification():
     assert res.data["title"] == "NEMO Test Suite"
 
 
+@pytest.mark.asyncio
+async def test_desktop_integration_set_and_cancel_alarm():
+    """Verify setting an alarm, querying it, and cancelling it without admin elevation."""
+    tool = WindowsDesktopTool()
+
+    # 1. Test natural time parsing
+    t24, label = tool._parse_alarm_time("6 PM")
+    assert t24 == "18:00"
+    assert "6:00 PM" in label
+
+    t24_b, _ = tool._parse_alarm_time("18:00")
+    assert t24_b == "18:00"
+
+    # 2. Set alarm for 23:58 (end of day)
+    res_set = await tool.execute(
+        {
+            "action": "set_alarm",
+            "time": "11:58 PM",
+            "title": "Test 11:58 PM Alarm",
+            "message": "Alarm unit test execution",
+        },
+        {},
+    )
+    assert res_set.success is True
+    task_name = res_set.data["task_name"]
+    assert "NEMO_Alarm_" in task_name
+
+    # 3. List alarms to verify registered
+    res_list = await tool.execute({"action": "list_alarms"}, {})
+    assert res_list.success is True
+    active_names = [a["task_name"] for a in res_list.data["alarms"]]
+    assert task_name in active_names
+
+    # 4. Cancel alarm
+    res_cancel = await tool.execute({"action": "cancel_alarm", "task_name": task_name}, {})
+    assert res_cancel.success is True
+    assert task_name in res_cancel.data["deleted_tasks"]
+
+
 def test_extract_json_block_multi_concatenated_objects():
     """Verify extract_json_block extracts first valid JSON block when LLM concatenates multiple objects."""
     from nemo.agent.orchestrator import extract_json_block

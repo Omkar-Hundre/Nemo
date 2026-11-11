@@ -5,6 +5,7 @@ import ast
 import asyncio
 import csv
 import ctypes
+import datetime
 import html
 import json
 import os
@@ -266,6 +267,10 @@ class TerminalTool(BaseTool):
         cwd = Path(context.get("working_directory", Path.cwd()))
 
         res = await self.executor.execute(cmd, cwd=cwd, timeout_seconds=timeout)
+        err = res.stderr if not res.is_success else None
+        if err and any(term in err.lower() for term in ("access is denied", "0x80070005", "requires elevation", "run as administrator")):
+            err += "\n[Permission Notice]: This operation requires Windows Administrator privileges. Run PowerShell as Administrator to grant elevation, or use non-elevated user tools."
+
         return ToolResult(
             success=res.is_success,
             data={
@@ -275,7 +280,7 @@ class TerminalTool(BaseTool):
                 "stderr": res.stderr,
                 "duration_ms": res.duration_ms,
             },
-            error=res.stderr if not res.is_success else None,
+            error=err,
         )
 
 
@@ -2798,16 +2803,91 @@ class SystemInspectorTool(BaseTool):
 
 
 class WindowsDesktopTool(BaseTool):
-    """Native Windows desktop integration: copy and read clipboard data, and trigger desktop toast notifications."""
+    """Native Windows desktop integration: clipboard, toast notifications, alarms, and timers."""
     name = "desktop_integration"
     description = (
-        "Interact with Windows desktop: copy text to clipboard, read current clipboard content, "
-        "and display native desktop toast notifications on task completion."
+        "Interact with Windows desktop: copy/read clipboard data, display native desktop toast notifications, "
+        "and schedule persistent desktop alarms and countdown timers via Windows Task Scheduler."
     )
     risk_level = RiskLevel.L1
 
     def __init__(self) -> None:
         self.executor = NativeSubprocessExecutor()
+
+    @staticmethod
+    def _ensure_alarm_script() -> Path:
+        """Ensure ~/.nemo/scripts/trigger_alarm.ps1 exists for user-scheduled alarms/timers."""
+        scripts_dir = Path.home() / ".nemo" / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        script_file = scripts_dir / "trigger_alarm.ps1"
+        if not script_file.exists():
+            content = """param(
+    [string]$Title = "⏰ NEMO Alarm",
+    [string]$Message = "Alarm time reached!"
+)
+
+try {
+    [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+    $template = [Windows.UI.Notifications.ToastTemplateType]::ToastText02
+    $xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($template)
+    $textNodes = $xml.GetElementsByTagName('text')
+    $textNodes.Item(0).AppendChild($xml.CreateTextNode($Title)) | Out-Null
+    $textNodes.Item(1).AppendChild($xml.CreateTextNode($Message)) | Out-Null
+    $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
+    $appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe'
+    $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId)
+    $notifier.Show($toast)
+} catch {
+    [void][System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')
+    $n = New-Object System.Windows.Forms.NotifyIcon
+    $n.Icon = [System.Drawing.SystemIcons]::Information
+    $n.BalloonTipTitle = $Title
+    $n.BalloonTipText = $Message
+    $n.Visible = $True
+    $n.ShowBalloonTip(4000)
+    Start-Sleep -Seconds 4
+    $n.Dispose()
+}
+[System.Media.SystemSounds]::Exclamation.Play()
+"""
+            script_file.write_text(content, encoding="utf-8")
+        return script_file
+
+    @staticmethod
+    def _parse_alarm_time(time_str: str) -> tuple[str, str]:
+        """Parse natural time string ('6 PM', '6:00 PM', '18:00') into (24h_HH_mm, formatted_label)."""
+        s = str(time_str).strip().upper()
+        # 12-hour format e.g. "6 PM", "6:00 PM", "6:30 AM", "6pm"
+        m_12 = re.match(r"^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)$", s)
+        if m_12:
+            hour = int(m_12.group(1))
+            minute = int(m_12.group(2) or 0)
+            ampm = m_12.group(3)
+            formatted_label = f"{hour}:{minute:02d} {ampm}"
+            if ampm == "PM" and hour < 12:
+                hour += 12
+            elif ampm == "AM" and hour == 12:
+                hour = 0
+            return f"{hour:02d}:{minute:02d}", formatted_label
+
+        # 24-hour format e.g. "18:00", "06:30"
+        m_24 = re.match(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?$", s)
+        if m_24:
+            hour = int(m_24.group(1))
+            minute = int(m_24.group(2))
+            am_pm = "PM" if hour >= 12 else "AM"
+            h_12 = hour if 1 <= hour <= 12 else (hour - 12 if hour > 12 else 12)
+            formatted_label = f"{h_12}:{minute:02d} {am_pm}"
+            return f"{hour:02d}:{minute:02d}", formatted_label
+
+        # Plain hour integer e.g. "18"
+        if s.isdigit() and 0 <= int(s) <= 23:
+            hour = int(s)
+            am_pm = "PM" if hour >= 12 else "AM"
+            h_12 = hour if 1 <= hour <= 12 else (hour - 12 if hour > 12 else 12)
+            return f"{hour:02d}:00", f"{h_12}:00 {am_pm}"
+
+        raise ValueError(f"Unrecognized time format: '{time_str}'. Expected e.g. '18:00', '6:00 PM', or '6 PM'.")
 
     def get_definition(self) -> ToolDefinition:
         return ToolDefinition(
@@ -2818,12 +2898,23 @@ class WindowsDesktopTool(BaseTool):
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["clipboard_copy", "clipboard_read", "notify"],
+                        "enum": [
+                            "clipboard_copy",
+                            "clipboard_read",
+                            "notify",
+                            "set_alarm",
+                            "set_timer",
+                            "list_alarms",
+                            "cancel_alarm",
+                        ],
                         "description": "Desktop action to perform.",
                     },
                     "text": {"type": "string", "description": "Text to copy to clipboard (for 'clipboard_copy')."},
-                    "title": {"type": "string", "description": "Notification title (for 'notify'). Default 'NEMO Assistant'."},
-                    "message": {"type": "string", "description": "Notification message (for 'notify')."},
+                    "title": {"type": "string", "description": "Title for notification or alarm."},
+                    "message": {"type": "string", "description": "Message for notification or alarm."},
+                    "time": {"type": "string", "description": "Time string to trigger alarm, e.g. '18:00', '6:00 PM', '6 PM' (for 'set_alarm')."},
+                    "minutes": {"type": "number", "description": "Duration in minutes for countdown timer (for 'set_timer')."},
+                    "task_name": {"type": "string", "description": "Specific task name to cancel or 'all' (for 'cancel_alarm')."},
                 },
                 "required": ["action"],
             },
@@ -2900,6 +2991,122 @@ class WindowsDesktopTool(BaseTool):
                     success=True,
                     data={"action": "notify", "title": title, "message": msg, "delivered": True},
                 )
+
+            elif action == "set_alarm":
+                raw_time = arguments.get("time", "")
+                if not raw_time:
+                    return ToolResult(success=False, error="Parameter 'time' is required for set_alarm (e.g. '18:00' or '6:00 PM').")
+                try:
+                    time_24, label = self._parse_alarm_time(raw_time)
+                except ValueError as err:
+                    return ToolResult(success=False, error=str(err))
+
+                script_path = self._ensure_alarm_script()
+                title = arguments.get("title") or f"⏰ NEMO Alarm ({label})"
+                msg = arguments.get("message") or f"{label} Alarm - NEMO Assistant"
+                task_name = f"NEMO_Alarm_{time_24.replace(':', '')}"
+
+                cmd = [
+                    "schtasks", "/create",
+                    "/tn", task_name,
+                    "/tr", f'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{script_path}" -Title "{title}" -Message "{msg}"',
+                    "/sc", "once",
+                    "/st", time_24,
+                    "/f",
+                ]
+                proc = subprocess.run(cmd, capture_output=True, text=True)
+                if proc.returncode != 0:
+                    return ToolResult(success=False, error=f"Failed to schedule alarm: {proc.stderr or proc.stdout}")
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "set_alarm",
+                        "task_name": task_name,
+                        "scheduled_time": label,
+                        "time_24h": time_24,
+                        "status": "active",
+                        "title": title,
+                        "message": msg,
+                        "note": "Alarm successfully registered in Windows Task Scheduler (runs without admin privileges).",
+                    },
+                )
+
+            elif action == "set_timer":
+                minutes_val = arguments.get("minutes") or arguments.get("duration", 10)
+                try:
+                    minutes = float(minutes_val)
+                except (ValueError, TypeError):
+                    minutes = 10.0
+
+                now = datetime.datetime.now()
+                target = now + datetime.timedelta(minutes=minutes)
+                time_24 = target.strftime("%H:%M")
+                label = target.strftime("%I:%M %p")
+                script_path = self._ensure_alarm_script()
+                title = arguments.get("title") or f"⏳ Timer Finished ({int(minutes)}m)"
+                msg = arguments.get("message") or f"Your {int(minutes)}-minute timer has finished!"
+                task_name = f"NEMO_Timer_{target.strftime('%H%M%S')}"
+
+                cmd = [
+                    "schtasks", "/create",
+                    "/tn", task_name,
+                    "/tr", f'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{script_path}" -Title "{title}" -Message "{msg}"',
+                    "/sc", "once",
+                    "/st", time_24,
+                    "/f",
+                ]
+                proc = subprocess.run(cmd, capture_output=True, text=True)
+                if proc.returncode != 0:
+                    return ToolResult(success=False, error=f"Failed to set timer: {proc.stderr or proc.stdout}")
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "set_timer",
+                        "task_name": task_name,
+                        "duration_minutes": minutes,
+                        "trigger_time": label,
+                        "time_24h": time_24,
+                        "status": "active",
+                    },
+                )
+
+            elif action == "list_alarms":
+                proc = subprocess.run(["schtasks", "/query", "/fo", "CSV"], capture_output=True, text=True)
+                alarms = []
+                if proc.returncode == 0:
+                    for line in proc.stdout.splitlines():
+                        if "NEMO_Alarm_" in line or "NEMO_Timer_" in line:
+                            parts = [p.strip('"\r') for p in line.split('","')]
+                            if len(parts) >= 3:
+                                alarms.append({
+                                    "task_name": parts[0].lstrip("\\"),
+                                    "next_run_time": parts[1],
+                                    "status": parts[2],
+                                })
+                return ToolResult(success=True, data={"action": "list_alarms", "count": len(alarms), "alarms": alarms})
+
+            elif action == "cancel_alarm":
+                target_name = arguments.get("task_name", "all").strip()
+                deleted = []
+                if target_name.lower() in ("all", "*"):
+                    proc = subprocess.run(["schtasks", "/query", "/fo", "CSV"], capture_output=True, text=True)
+                    for line in proc.stdout.splitlines():
+                        if "NEMO_Alarm_" in line or "NEMO_Timer_" in line:
+                            parts = [p.strip('"\r') for p in line.split('","')]
+                            if parts:
+                                t_name = parts[0].lstrip("\\")
+                                subprocess.run(["schtasks", "/delete", "/tn", t_name, "/f"], capture_output=True)
+                                deleted.append(t_name)
+                else:
+                    proc = subprocess.run(["schtasks", "/delete", "/tn", target_name, "/f"], capture_output=True)
+                    if proc.returncode == 0:
+                        deleted.append(target_name)
+                    else:
+                        return ToolResult(success=False, error=f"Task '{target_name}' not found or could not be deleted.")
+
+                return ToolResult(success=True, data={"action": "cancel_alarm", "deleted_tasks": deleted, "count": len(deleted)})
 
             else:
                 return ToolResult(success=False, error=f"Unsupported desktop action: '{action}'")
