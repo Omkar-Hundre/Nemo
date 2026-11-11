@@ -3359,6 +3359,41 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
 
         raise ValueError(f"Unrecognized time format: '{time_str}'. Expected e.g. '18:00', '6:00 PM', or '6 PM'.")
 
+    @staticmethod
+    def _resolve_user_target_path(raw_path: str, base_dir: Path) -> Path:
+        """Resolve user path, automatically mapping standard folders like 'downloads', 'desktop', 'pictures' to Windows UserProfile."""
+        p_str = str(raw_path).strip()
+        p_lower = p_str.lower().replace("\\", "/")
+
+        if p_lower.startswith("downloads/") or p_lower == "downloads":
+            remainder = p_str[len("downloads"):].lstrip("\\/") or "output.jpg"
+            target_dir = Path.home() / "Downloads"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            return target_dir / remainder
+        elif p_lower.startswith("desktop/") or p_lower == "desktop":
+            remainder = p_str[len("desktop"):].lstrip("\\/") or "output.jpg"
+            target_dir = Path.home() / "Desktop"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            return target_dir / remainder
+        elif p_lower.startswith("pictures/") or p_lower == "pictures":
+            remainder = p_str[len("pictures"):].lstrip("\\/") or "output.jpg"
+            target_dir = Path.home() / "Pictures"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            return target_dir / remainder
+        elif p_lower.startswith("documents/") or p_lower == "documents":
+            remainder = p_str[len("documents"):].lstrip("\\/") or "output.jpg"
+            target_dir = Path.home() / "Documents"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            return target_dir / remainder
+
+        p = Path(raw_path)
+        if p.is_absolute():
+            p.parent.mkdir(parents=True, exist_ok=True)
+            return p
+        target = base_dir / raw_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        return target
+
     def get_definition(self) -> ToolDefinition:
         return ToolDefinition(
             name=self.name,
@@ -3658,7 +3693,7 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
 
             elif action in ("camera_snapshot", "capture_camera"):
                 out_path = arguments.get("path") or arguments.get("output_path") or "camera_snapshot.jpg"
-                out_file = Path(context.get("working_directory", Path.cwd())) / out_path
+                out_file = self._resolve_user_target_path(out_path, base_dir)
 
                 # Launch native Windows Camera app
                 subprocess.Popen(["cmd.exe", "/c", "start", "microsoft.windows.camera:"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -3867,17 +3902,16 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                 panes = arguments.get("panes") or ["backend: powershell", "frontend: powershell", "docker: powershell"]
                 start_dir = arguments.get("directory") or str(base_dir)
 
-                # Build wt.exe multi-pane command
-                wt_args = ["wt.exe", "-w", "0", "nt", "-d", f'"{start_dir}"']
+                # Build wt.exe multi-pane command arguments
+                wt_args = ["wt.exe", "-w", "0", "nt", "-d", str(start_dir)]
                 for i, _ in enumerate(panes):
                     if i == 0:
                         continue
                     split_flag = "-V" if (i % 2 == 1) else "-H"
-                    wt_args.extend([";", "sp", split_flag, "-d", f'"{start_dir}"'])
+                    wt_args.extend([";", "sp", split_flag, "-d", str(start_dir)])
 
-                cmd_str = " ".join(wt_args)
                 try:
-                    subprocess.Popen(cmd_str, shell=True)
+                    subprocess.Popen(wt_args, shell=False)
                 except Exception as wt_err:
                     return ToolResult(success=False, error=f"Failed to launch Windows Terminal: {wt_err}")
 
@@ -3888,7 +3922,7 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                         "panes_count": len(panes),
                         "panes": panes,
                         "start_directory": start_dir,
-                        "wt_command": cmd_str,
+                        "wt_command": " ".join(wt_args),
                         "note": f"Windows Terminal opened with {len(panes)}-pane development layout.",
                     },
                 )
