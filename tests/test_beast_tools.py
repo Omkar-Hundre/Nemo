@@ -618,6 +618,22 @@ async def test_desktop_integration_timer_and_pomodoro_widgets():
     assert res_pomo.data["break_minutes"] == 10
     assert res_pomo.data["cycles"] == 3
 
+    # 3. Test set_timer with seconds
+    res_sec = await tool.execute(
+        {"action": "set_timer", "seconds": 10, "title": "10s Timer"},
+        {},
+    )
+    assert res_sec.success is True
+    assert res_sec.data["duration_seconds"] == 10
+
+    # 4. Test start_stopwatch
+    res_sw = await tool.execute(
+        {"action": "start_stopwatch"},
+        {},
+    )
+    assert res_sw.success is True
+    assert res_sw.data["action"] == "start_stopwatch"
+
 
 def test_extract_json_block_multi_concatenated_objects():
     """Verify extract_json_block extracts first valid JSON block when LLM concatenates multiple objects."""

@@ -2803,6 +2803,33 @@ class SystemInspectorTool(BaseTool):
 
 
 
+def capture_desktop_screenshot_base64() -> str | None:
+    """Capture full desktop screen to base64 PNG using PowerShell .NET Graphics."""
+    ps_cmd = (
+        "Add-Type -AssemblyName System.Windows.Forms, System.Drawing; "
+        "$s = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; "
+        "$b = New-Object System.Drawing.Bitmap($s.Width, $s.Height); "
+        "$g = [System.Drawing.Graphics]::FromImage($b); "
+        "$g.CopyFromScreen($s.Location, [System.Drawing.Point]::Empty, $s.Size); "
+        "$ms = New-Object System.IO.MemoryStream; "
+        "$b.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png); "
+        "[Convert]::ToBase64String($ms.ToArray()); "
+        "$ms.Dispose(); $g.Dispose(); $b.Dispose();"
+    )
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
 class WindowsClockAutomator:
     """Automate the native Windows Clock app (Focus sessions, Timers, Alarms, Stopwatch) via UI Automation."""
 
@@ -2842,8 +2869,12 @@ class WindowsClockAutomator:
 
         if not found and auto_launch:
             subprocess.Popen(["cmd.exe", "/c", "start", "ms-clock:"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(wait_seconds)
-            return cls.get_clock_window(auto_launch=False)
+            for _ in range(int(wait_seconds * 2)):
+                time.sleep(0.5)
+                w = cls.get_clock_window(auto_launch=False)
+                if w:
+                    return w
+            return None
 
         if found:
             hwnd = found[0]
@@ -2861,7 +2892,7 @@ class WindowsClockAutomator:
         return None
 
     @classmethod
-    def start_focus_session(cls, minutes: float = 25.0, skip_breaks: bool = False, keep_on_top: bool = False) -> dict[str, Any]:
+    def start_focus_session(cls, minutes: float = 25.0, skip_breaks: bool = False, keep_on_top: bool = True) -> dict[str, Any]:
         """Automate Windows Clock: Focus sessions -> set minutes -> Start focus session -> optional Keep on top."""
         win = cls.get_clock_window()
         if not win:
@@ -2878,7 +2909,7 @@ class WindowsClockAutomator:
                     except Exception:
                         pass
                 break
-        time.sleep(1.0)
+        time.sleep(0.6)
 
         # Step 2: Set duration
         mins_int = int(max(1, minutes))
@@ -2904,7 +2935,7 @@ class WindowsClockAutomator:
                         pass
                     break
 
-        time.sleep(0.5)
+        time.sleep(0.4)
 
         # Step 4: Click Start focus session
         started = False
@@ -2917,7 +2948,7 @@ class WindowsClockAutomator:
                     pass
                 break
 
-        # Step 5: Optional keep on top
+        # Step 5: Optional keep on top compact floating mode
         popped_aot = False
         if keep_on_top and started:
             time.sleep(0.5)
@@ -2941,8 +2972,8 @@ class WindowsClockAutomator:
         }
 
     @classmethod
-    def start_stopwatch(cls, keep_on_top: bool = False) -> dict[str, Any]:
-        """Automate Windows Clock: Stopwatch -> Start -> optionally Keep on top."""
+    def start_stopwatch(cls, keep_on_top: bool = True) -> dict[str, Any]:
+        """Automate Windows Clock: Stopwatch -> Start -> Keep on top."""
         win = cls.get_clock_window()
         if not win:
             return {"success": False, "error": "Could not launch or connect to Windows Clock app."}
@@ -2957,20 +2988,20 @@ class WindowsClockAutomator:
                     except Exception:
                         pass
                 break
-        time.sleep(1.0)
+        time.sleep(0.6)
 
         started = False
         popped_aot = False
         for c in win.descendants():
             aid = c.element_info.automation_id
-            if aid in ("StartButton", "TimerPlayPauseButton") and not started:
+            if aid in ("StopwatchPlayPauseButton", "StartButton", "TimerPlayPauseButton") and not started:
                 try:
                     c.invoke()
                     started = True
                 except Exception:
                     pass
             elif aid == "AotButton" and keep_on_top:
-                time.sleep(0.5)
+                time.sleep(0.4)
                 try:
                     c.invoke()
                     popped_aot = True
@@ -2982,12 +3013,18 @@ class WindowsClockAutomator:
             "feature": "stopwatch",
             "started": started,
             "keep_on_top": popped_aot,
-            "note": "Native Windows Clock stopwatch started on screen.",
+            "note": "Native Windows Clock stopwatch started on screen in compact mode.",
         }
 
     @classmethod
-    def start_timer(cls, minutes: float = 5.0, keep_on_top: bool = True) -> dict[str, Any]:
-        """Automate Windows Clock: Timer -> select preset or add timer -> Start -> Keep on top."""
+    def start_timer(
+        cls,
+        minutes: float = 0.0,
+        seconds: float = 0.0,
+        title: str = "Timer",
+        keep_on_top: bool = True,
+    ) -> dict[str, Any]:
+        """Automate Windows Clock: Timer -> preset or custom duration -> Start -> Keep on top."""
         win = cls.get_clock_window()
         if not win:
             return {"success": False, "error": "Could not launch or connect to Windows Clock app."}
@@ -3003,54 +3040,137 @@ class WindowsClockAutomator:
                     except Exception:
                         pass
                 break
-        time.sleep(1.0)
+        time.sleep(0.6)
 
-        # Step 2: Match timer preset (1 min, 3 min, 5 min, 10 min) or first timer
-        target_mins = int(minutes)
+        total_sec = int(round(seconds + (minutes * 60.0)))
+        if total_sec <= 0:
+            total_sec = 60
+
+        target_h = total_sec // 3600
+        target_m = (total_sec % 3600) // 60
+        target_s = total_sec % 60
+
+        is_preset = (target_h == 0 and target_s == 0 and target_m in (1, 3, 5, 10))
         timer_started = False
         popped_aot = False
 
-        matching_card = None
-        first_card = None
-        for c in win.descendants():
-            if c.element_info.automation_id == "TimerViewGrid":
-                name = (c.element_info.name or "").lower()
-                if not first_card:
-                    first_card = c
-                if f"{target_mins} min" in name:
-                    matching_card = c
+        if is_preset:
+            matching_card = None
+            first_card = None
+            for c in win.descendants():
+                if c.element_info.automation_id == "TimerViewGrid":
+                    name = (c.element_info.name or "").lower()
+                    if not first_card:
+                        first_card = c
+                    if f"{target_m} min" in name:
+                        matching_card = c
+                        break
+            card_to_use = matching_card or first_card
+            if card_to_use:
+                for sub in card_to_use.descendants():
+                    aid = sub.element_info.automation_id
+                    if aid == "TimerPlayPauseButton":
+                        try:
+                            sub.invoke()
+                            timer_started = True
+                        except Exception:
+                            pass
+                    elif aid == "AotButton" and keep_on_top:
+                        time.sleep(0.4)
+                        try:
+                            sub.invoke()
+                            popped_aot = True
+                        except Exception:
+                            pass
+        else:
+            # Custom timer (e.g. 10 seconds, 45 seconds, 25 minutes)
+            # Click AddTimerButton (+)
+            for c in win.descendants():
+                if c.element_info.automation_id == "AddTimerButton":
+                    try:
+                        c.invoke()
+                    except Exception:
+                        pass
+                    break
+            time.sleep(0.6)
+
+            # Set duration picker columns (hours, minutes, seconds)
+            for c in win.descendants():
+                if c.element_info.automation_id == "DurationPicker":
+                    for child in c.children():
+                        col = child.element_info.name
+                        t_val = target_h if col == "hours" else (target_m if col == "minutes" else target_s)
+                        mod = 24 if col == "hours" else 60
+                        half = mod // 2
+                        try:
+                            cur = int(child.legacy_properties()["Value"])
+                            diff = (t_val - cur) % mod
+                            btns = [b for b in child.descendants() if b.element_info.control_type == "Button"]
+                            if len(btns) >= 2:
+                                btn = btns[0] if diff <= half else btns[1]
+                                steps = diff if diff <= half else (mod - diff)
+                                for _ in range(steps):
+                                    btn.invoke()
+                        except Exception:
+                            pass
+
+            # Set timer name in Edit box
+            timer_label = title or (f"{target_s}s Timer" if target_m == 0 else f"{target_m}m {target_s}s Timer")
+            for c in win.descendants():
+                if c.element_info.control_type == "Edit":
+                    try:
+                        c.set_edit_text(timer_label)
+                    except Exception:
+                        pass
                     break
 
-        card_to_use = matching_card or first_card
-        if card_to_use:
-            for sub in card_to_use.descendants():
-                aid = sub.element_info.automation_id
-                if aid == "TimerPlayPauseButton":
+            # Click Save (PrimaryButton)
+            for c in win.descendants():
+                if c.element_info.automation_id == "PrimaryButton":
                     try:
-                        sub.invoke()
-                        timer_started = True
+                        c.invoke()
                     except Exception:
                         pass
-                elif aid == "AotButton" and keep_on_top:
-                    time.sleep(0.5)
-                    try:
-                        sub.invoke()
-                        popped_aot = True
-                    except Exception:
-                        pass
+                    break
+            time.sleep(0.6)
+
+            # Find the new timer card and start it + AOT
+            for c in win.descendants():
+                if c.element_info.automation_id == "TimerViewGrid":
+                    name = (c.element_info.name or "").lower()
+                    if timer_label.lower() in name or (target_s > 0 and f"{target_s} second" in name):
+                        for sub in c.descendants():
+                            aid = sub.element_info.automation_id
+                            if aid == "TimerPlayPauseButton":
+                                try:
+                                    sub.invoke()
+                                    timer_started = True
+                                except Exception:
+                                    pass
+                            elif aid == "AotButton" and keep_on_top:
+                                time.sleep(0.4)
+                                try:
+                                    sub.invoke()
+                                    popped_aot = True
+                                except Exception:
+                                    pass
+                        break
 
         return {
             "success": True,
             "feature": "timer",
-            "minutes": target_mins,
+            "total_seconds": total_sec,
+            "hours": target_h,
+            "minutes": target_m,
+            "seconds": target_s,
             "timer_started": timer_started,
             "keep_on_top_widget": popped_aot,
-            "note": "Native Windows Clock timer started on screen with compact always-on-top mode.",
+            "note": "Native Windows Clock timer configured and started with compact always-on-top mode.",
         }
 
     @classmethod
     def set_alarm_ui(cls, hour: int, minute: int, name: str = "Alarm") -> dict[str, Any]:
-        """Automate Windows Clock: Alarm -> Add new alarm -> set name and Save."""
+        """Automate Windows Clock: Alarm -> Add new alarm -> set exact hour, minute, name, and Save."""
         win = cls.get_clock_window()
         if not win:
             return {"success": False, "error": "Could not launch or connect to Windows Clock app."}
@@ -3066,7 +3186,7 @@ class WindowsClockAutomator:
                     except Exception:
                         pass
                 break
-        time.sleep(1.0)
+        time.sleep(0.6)
 
         # Step 2: Click Add an alarm (+)
         for c in win.descendants():
@@ -3076,9 +3196,41 @@ class WindowsClockAutomator:
                 except Exception:
                     pass
                 break
-        time.sleep(1.0)
+        time.sleep(0.6)
 
-        # Step 3: Set Alarm Name in Edit box if present
+        # Step 3: Set exact Hour on HourPicker
+        for c in win.descendants():
+            if c.element_info.automation_id == "HourPicker":
+                btns = [b for b in c.descendants() if b.element_info.control_type == "Button"]
+                if len(btns) >= 2:
+                    try:
+                        cur = int(c.legacy_properties()["Value"])
+                        diff = (hour - cur) % 24
+                        btn = btns[0] if diff <= 12 else btns[1]
+                        steps = diff if diff <= 12 else (24 - diff)
+                        for _ in range(steps):
+                            btn.invoke()
+                    except Exception:
+                        pass
+                break
+
+        # Step 4: Set exact Minute on MinutePicker
+        for c in win.descendants():
+            if c.element_info.automation_id == "MinutePicker":
+                btns = [b for b in c.descendants() if b.element_info.control_type == "Button"]
+                if len(btns) >= 2:
+                    try:
+                        cur = int(c.legacy_properties()["Value"])
+                        diff = (minute - cur) % 60
+                        btn = btns[0] if diff <= 30 else btns[1]
+                        steps = diff if diff <= 30 else (60 - diff)
+                        for _ in range(steps):
+                            btn.invoke()
+                    except Exception:
+                        pass
+                break
+
+        # Step 5: Set Alarm Name in Edit box
         for c in win.descendants():
             if c.element_info.control_type == "Edit" and "name" in (c.element_info.name or "").lower():
                 try:
@@ -3087,7 +3239,7 @@ class WindowsClockAutomator:
                     pass
                 break
 
-        # Step 4: Click Save (PrimaryButton)
+        # Step 6: Click Save (PrimaryButton)
         saved = False
         for c in win.descendants():
             if c.element_info.automation_id == "PrimaryButton":
@@ -3222,6 +3374,9 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                             "set_alarm",
                             "set_timer",
                             "start_pomodoro",
+                            "start_stopwatch",
+                            "clock_stopwatch",
+                            "stopwatch",
                             "list_alarms",
                             "cancel_alarm",
                         ],
@@ -3232,10 +3387,13 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                     "message": {"type": "string", "description": "Message for notification or alarm."},
                     "time": {"type": "string", "description": "Time string to trigger alarm, e.g. '18:00', '6:00 PM', '6 PM' (for 'set_alarm')."},
                     "minutes": {"type": "number", "description": "Duration in minutes for countdown timer (for 'set_timer')."},
+                    "seconds": {"type": "number", "description": "Duration in seconds for countdown timer (for 'set_timer')."},
+                    "keep_on_top": {"type": "boolean", "description": "Whether to place the widget in compact always-on-top mode (default true)."},
                     "focus_minutes": {"type": "number", "description": "Pomodoro focus duration in minutes (default 25) (for 'start_pomodoro')."},
                     "break_minutes": {"type": "number", "description": "Pomodoro short break duration in minutes (default 5) (for 'start_pomodoro')."},
                     "long_break_minutes": {"type": "number", "description": "Pomodoro long break duration in minutes (default 15) (for 'start_pomodoro')."},
                     "cycles": {"type": "integer", "description": "Pomodoro cycles before long break (default 4) (for 'start_pomodoro')."},
+                    "skip_breaks": {"type": "boolean", "description": "Whether to skip breaks during focus session (for 'start_pomodoro')."},
                     "task_name": {"type": "string", "description": "Specific task name to cancel or 'all' (for 'cancel_alarm')."},
                 },
                 "required": ["action"],
@@ -3366,22 +3524,34 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                 )
 
             elif action == "set_timer":
-                minutes_val = arguments.get("minutes") or arguments.get("duration", 25)
+                minutes_val = arguments.get("minutes") or 0.0
+                seconds_val = arguments.get("seconds") or 0.0
                 try:
                     minutes = float(minutes_val)
                 except (ValueError, TypeError):
-                    minutes = 25.0
+                    minutes = 0.0
+                try:
+                    seconds = float(seconds_val)
+                except (ValueError, TypeError):
+                    seconds = 0.0
 
-                title = arguments.get("title") or f"Timer ({int(minutes)}m)"
+                if minutes == 0.0 and seconds == 0.0:
+                    minutes = 5.0
 
-                # Automate native Windows Clock timer directly (preset/custom + Keep on top mini floating mode)
-                res = WindowsClockAutomator.start_timer(minutes=minutes, keep_on_top=True)
+                title = arguments.get("title") or (
+                    f"Timer ({int(seconds)}s)" if (seconds > 0 and minutes == 0) else f"Timer ({int(minutes)}m)"
+                )
+                keep_on_top = bool(arguments.get("keep_on_top", True))
+
+                # Automate native Windows Clock timer directly (preset or custom hours/minutes/seconds)
+                res = WindowsClockAutomator.start_timer(minutes=minutes, seconds=seconds, title=title, keep_on_top=keep_on_top)
 
                 return ToolResult(
                     success=True,
                     data={
                         "action": "set_timer",
                         "duration_minutes": minutes,
+                        "duration_seconds": seconds,
                         "title": title,
                         "widget_status": "active (native Windows Clock keep-on-top timer)",
                         "clock_app": "automated",
@@ -3396,10 +3566,11 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                 long_break = float(arguments.get("long_break_minutes") or arguments.get("long_break") or 15.0)
                 cycles = int(arguments.get("cycles") or 4)
                 skip_breaks = bool(arguments.get("skip_breaks", False))
+                keep_on_top = bool(arguments.get("keep_on_top", True))
                 title = arguments.get("title") or "Pomodoro Focus"
 
-                # Automate native Windows Clock Focus Session directly
-                res = WindowsClockAutomator.start_focus_session(minutes=focus, skip_breaks=skip_breaks, keep_on_top=False)
+                # Automate native Windows Clock Focus Session directly with always-on-top compact mode
+                res = WindowsClockAutomator.start_focus_session(minutes=focus, skip_breaks=skip_breaks, keep_on_top=keep_on_top)
 
                 return ToolResult(
                     success=True,
@@ -3414,6 +3585,19 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                         "clock_app": "automated",
                         "clock_details": res,
                         "note": "Native Windows Clock Focus Session started directly on screen.",
+                    },
+                )
+
+            elif action in ("start_stopwatch", "clock_stopwatch", "stopwatch"):
+                keep_on_top = bool(arguments.get("keep_on_top", True))
+                res = WindowsClockAutomator.start_stopwatch(keep_on_top=keep_on_top)
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "start_stopwatch",
+                        "clock_app": "automated",
+                        "clock_details": res,
+                        "note": "Native Windows Clock stopwatch started on screen in compact mode.",
                     },
                 )
 
@@ -3749,8 +3933,13 @@ class WindowsGuiTool(BaseTool):
                             "clock_timer",
                             "clock_alarm",
                             "clock_stopwatch",
+                            "analyze_screen",
                         ],
                         "description": "Desktop GUI action to perform.",
+                    },
+                    "prompt": {
+                        "type": "string",
+                        "description": "Question or prompt for visual analysis (for 'analyze_screen').",
                     },
                     "target": {
                         "type": "string",
@@ -3991,9 +4180,11 @@ class WindowsGuiTool(BaseTool):
                 return ToolResult(success=res.get("success", True), data=res)
 
             elif action == "clock_timer":
-                mins = float(arguments.get("minutes", 5.0))
+                mins = float(arguments.get("minutes", 0.0))
+                secs = float(arguments.get("seconds", 0.0))
+                title = arguments.get("title", "Timer")
                 aot = bool(arguments.get("keep_on_top", True))
-                res = WindowsClockAutomator.start_timer(minutes=mins, keep_on_top=aot)
+                res = WindowsClockAutomator.start_timer(minutes=mins, seconds=secs, title=title, keep_on_top=aot)
                 return ToolResult(success=res.get("success", True), data=res)
 
             elif action == "clock_alarm":
@@ -4005,9 +4196,28 @@ class WindowsGuiTool(BaseTool):
                 return ToolResult(success=res.get("success", True), data=res)
 
             elif action == "clock_stopwatch":
-                aot = bool(arguments.get("keep_on_top", False))
+                aot = bool(arguments.get("keep_on_top", True))
                 res = WindowsClockAutomator.start_stopwatch(keep_on_top=aot)
                 return ToolResult(success=res.get("success", True), data=res)
+
+            elif action == "analyze_screen":
+                prompt_text = arguments.get("prompt", "Analyze what is currently visible on screen and verify UI state.")
+                b64 = capture_desktop_screenshot_base64()
+                if not b64:
+                    return ToolResult(
+                        success=False,
+                        error="Could not capture desktop screen. Ensure active interactive session.",
+                    )
+                try:
+                    from nemo.ai.providers.nvidia import NvidiaNimProvider
+                    provider = NvidiaNimProvider()
+                    analysis = await provider.analyze_image(image_base64=b64, prompt=prompt_text)
+                    return ToolResult(
+                        success=True,
+                        data={"action": "analyze_screen", "prompt": prompt_text, "analysis": analysis},
+                    )
+                except Exception as viz_err:
+                    return ToolResult(success=False, error=f"Screen vision analysis failed: {viz_err}")
 
             else:
                 return ToolResult(success=False, error=f"Unsupported gui action: '{action}'")

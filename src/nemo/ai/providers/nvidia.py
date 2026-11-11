@@ -93,6 +93,33 @@ class NvidiaNimProvider(AIProvider):
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
 
+    async def analyze_image(
+        self,
+        image_base64: str,
+        prompt: str = "Analyze this screen image.",
+        max_tokens: int = 1024,
+    ) -> str:
+        """Analyze a screen image using the NVIDIA NIM Vision-Language model."""
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{image_base64}"},
+                        },
+                    ],
+                }
+            ],
+            temperature=0.2,
+            max_tokens=max_tokens,
+        )
+        choice = response.choices[0]
+        return choice.message.content or ""
+
 # 6. Public exports
 __all__ = ["NvidiaNimProvider"]
 
