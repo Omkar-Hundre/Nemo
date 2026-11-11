@@ -3,11 +3,14 @@
 # 1. Standard library imports
 import ast
 import asyncio
+import base64
 import csv
 import ctypes
 import datetime
 import html
+import io
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -31,13 +34,22 @@ import httpx
 import pypdf
 import trafilatura
 try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:
+    Image = None
+    ImageDraw = None
+    ImageFont = None
+
+try:
     import win32api
+    import win32clipboard
     import win32con
     import win32gui
     import win32process
     from pywinauto import Desktop
 except ImportError:
     win32api = None
+    win32clipboard = None
     win32con = None
     win32gui = None
     win32process = None
@@ -3405,42 +3417,46 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": [
-                            "clipboard_copy",
-                            "clipboard_read",
-                            "notify",
-                            "set_alarm",
-                            "set_timer",
-                            "start_pomodoro",
-                            "start_stopwatch",
-                            "clock_stopwatch",
-                            "stopwatch",
-                            "camera_snapshot",
-                            "capture_camera",
-                            "snipping_tool",
-                            "capture_region",
-                            "screen_clip",
-                            "play_audio",
-                            "play_music",
-                            "open_in_paint",
-                            "paint_draw",
-                            "draw_shape",
-                            "draw_in_paint",
-                            "open_youtube",
-                            "youtube",
-                            "play_youtube",
-                            "record_audio",
-                            "sound_recorder",
-                            "terminal_layout",
-                            "open_terminal_panes",
-                            "list_alarms",
-                            "cancel_alarm",
-                        ],
-                        "description": "Desktop action to perform.",
+                        "description": "Desktop action to perform (e.g. 'snip_screen', 'vision_snip', 'annotate_image', 'visual_markup', 'snipping_tool', 'camera_snapshot', 'play_audio', 'open_youtube', 'paint_draw', 'record_audio', 'terminal_layout', 'set_alarm', 'set_timer', 'start_pomodoro', 'start_stopwatch', 'clipboard_copy', 'clipboard_read', 'notify').",
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Target element, window, or region to snip or annotate (e.g. 'error popup', 'terminal', 'code editor', 'submit button', 'interactive').",
+                    },
+                    "box": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Optional bounding box coordinates [x1, y1, x2, y2].",
+                    },
+                    "arrow_from": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Starting [x, y] coordinate for arrow annotation.",
+                    },
+                    "arrow_to": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Target [x, y] coordinate for arrow annotation.",
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Text badge label to draw above the bounding box.",
+                    },
+                    "search_fix": {
+                        "type": "boolean",
+                        "description": "Whether to extract error text from cropped snip and query web search for the fix solution.",
+                    },
+                    "open_in_app": {
+                        "type": "boolean",
+                        "description": "Whether to open the snip or annotated image in Windows Snip & Sketch / Snipping Tool (default true).",
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Custom destination file path for annotated image or snip.",
                     },
                     "shape": {
                         "type": "string",
-                        "description": "Shape or object to draw in Paint with paint_draw (e.g. 'heart', 'star', 'hut', 'house', 'circle', 'square', 'triangle', 'triangle_over', 'diamond', 'rectangle').",
+                        "description": "Shape to draw for annotate_image ('box', 'rectangle', 'arrow', 'highlight', 'circle', 'label') or for paint_draw ('heart', 'star', 'hut', etc.).",
                     },
                     "position": {
                         "type": "string",
@@ -3508,6 +3524,258 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
         except Exception:
             pass
         return None
+
+    @staticmethod
+    def _capture_desktop_pil():
+        """Capture full desktop screen as a PIL Image using System.Drawing CopyFromScreen."""
+        b64 = capture_desktop_screenshot_base64()
+        if b64 and Image:
+            try:
+                return Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
+            except Exception:
+                pass
+        return None
+
+    @staticmethod
+    def _copy_image_to_clipboard(image) -> bool:
+        """Copy PIL Image to Windows clipboard in CF_DIB format so it can be pasted anywhere with Ctrl+V."""
+        if not win32clipboard or not image:
+            return False
+        try:
+            output = io.BytesIO()
+            image.convert("RGB").save(output, "BMP")
+            data = output.getvalue()[14:]  # drop 14-byte BMP header
+            output.close()
+            win32clipboard.OpenClipboard()
+            try:
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardData(win32clipboard.CF_DIB, data)
+                return True
+            finally:
+                win32clipboard.CloseClipboard()
+        except Exception:
+            return False
+
+    @staticmethod
+    def _open_in_snip_and_sketch(path: Path) -> None:
+        """Open image in Windows Snipping Tool / Snip & Sketch or default viewer."""
+        try:
+            subprocess.Popen(["SnippingTool.exe", str(path.resolve())], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            try:
+                os.startfile(str(path.resolve()))
+            except Exception:
+                pass
+
+    @classmethod
+    async def _locate_target_region(
+        cls,
+        img,
+        target: str | None,
+        explicit_box: list[int] | None = None,
+    ) -> tuple[tuple[int, int, int, int], str]:
+        """Resolve target bounding box (x1, y1, x2, y2) within image. Returns ((x1, y1, x2, y2), source)."""
+        w, h = img.size
+
+        # 1. Explicit box passed
+        if explicit_box and len(explicit_box) == 4:
+            b0, b1, b2, b3 = [int(v) for v in explicit_box]
+            if max(b0, b1, b2, b3) <= 1000 and min(w, h) > 1000:
+                return (int(b0 * w / 1000), int(b1 * h / 1000), int(b2 * w / 1000), int(b3 * h / 1000)), "explicit_normalized"
+            return (b0, b1, b2, b3), "explicit_coordinates"
+
+        if not target or target.lower() in ("full", "screen", "desktop"):
+            return (0, 0, w, h), "full_screen"
+
+        target_lower = target.lower()
+
+        # 2. Check active top-level GUI windows via win32gui
+        if win32gui:
+            windows_found = []
+            def enum_win(hwnd, _):
+                if win32gui.IsWindowVisible(hwnd) and not win32gui.IsIconic(hwnd):
+                    title = win32gui.GetWindowText(hwnd).strip()
+                    if title:
+                        rect = win32gui.GetWindowRect(hwnd)
+                        if rect[2] > rect[0] and rect[3] > rect[1]:
+                            windows_found.append((hwnd, title, rect))
+            try:
+                win32gui.EnumWindows(enum_win, None)
+            except Exception:
+                pass
+
+            keywords = [k for k in target_lower.split() if len(k) > 2]
+            for hwnd, title, rect in windows_found:
+                t_low = title.lower()
+                if any(k in t_low for k in keywords):
+                    l, t, r, b = rect
+                    cl = max(0, min(w, l))
+                    ct = max(0, min(h, t))
+                    cr = max(0, min(w, r))
+                    cb = max(0, min(h, b))
+                    if (cr - cl) > 50 and (cb - ct) > 50:
+                        return (cl, ct, cr, cb), f"window_match: '{title}'"
+
+            # Check for error / popup / dialog if target asks for error popup
+            if any(term in target_lower for term in ("error", "popup", "alert", "dialog", "exception")):
+                for hwnd, title, rect in windows_found:
+                    t_low = title.lower()
+                    if any(term in t_low for term in ("error", "alert", "warning", "exception", "failed", "dialog")):
+                        l, t, r, b = rect
+                        cl = max(0, min(w, l))
+                        ct = max(0, min(h, t))
+                        cr = max(0, min(w, r))
+                        cb = max(0, min(h, b))
+                        if (cr - cl) > 40 and (cb - ct) > 40:
+                            return (cl, ct, cr, cb), f"error_dialog_match: '{title}'"
+
+        # 3. Vision-Language detection via NVIDIA NIM / Vision provider
+        try:
+            from nemo.ai.providers.nvidia import NvidiaNimProvider
+            provider = NvidiaNimProvider()
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            img_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+            prompt = (
+                f"Locate the '{target}' in this image. "
+                "Return ONLY a JSON object: {{\"box\": [ymin, xmin, ymax, xmax]}} "
+                "where coordinates are integers normalized between 0 and 1000. "
+                "If not found, return {{\"box\": null}}."
+            )
+            response = await provider.analyze_image(image_base64=img_b64, prompt=prompt)
+            match = re.search(r"\{.*\"box\"\s*:\s*\[([0-9,\s]+)\].*\}", response, re.DOTALL)
+            if match:
+                nums = [int(n.strip()) for n in match.group(1).split(",") if n.strip()]
+                if len(nums) == 4:
+                    ymin, xmin, ymax, xmax = nums
+                    pad = 12
+                    x1 = max(0, int(xmin * w / 1000) - pad)
+                    y1 = max(0, int(ymin * h / 1000) - pad)
+                    x2 = min(w, int(xmax * w / 1000) + pad)
+                    y2 = min(h, int(ymax * h / 1000) + pad)
+                    if x2 > x1 and y2 > y1:
+                        return (x1, y1, x2, y2), f"ai_vision_detected: '{target}'"
+        except Exception:
+            pass
+
+        # 4. Fallback: Focused active foreground window
+        if win32gui:
+            try:
+                fg = win32gui.GetForegroundWindow()
+                if fg and win32gui.IsWindowVisible(fg):
+                    rect = win32gui.GetWindowRect(fg)
+                    l, t, r, b = rect
+                    cl = max(0, min(w, l))
+                    ct = max(0, min(h, t))
+                    cr = max(0, min(w, r))
+                    cb = max(0, min(h, b))
+                    if (cr - cl) > 60 and (cb - ct) > 60:
+                        return (cl, ct, cr, cb), "active_foreground_window"
+            except Exception:
+                pass
+
+        # 5. Default center region
+        return (int(w * 0.15), int(h * 0.15), int(w * 0.85), int(h * 0.85)), "default_center_region"
+
+    @staticmethod
+    def _draw_proper_shapes(
+        img,
+        shape: str,
+        color_name: str,
+        box: tuple[int, int, int, int],
+        label: str | None = None,
+        arrow_from: tuple[int, int] | None = None,
+        arrow_to: tuple[int, int] | None = None,
+        stroke_width: int = 4,
+        fill_alpha: int = 30,
+    ):
+        """Draw mathematically proper, clean shapes, arrows, highlights, and badges on image using PIL."""
+        if not ImageDraw:
+            return img
+
+        color_map = {
+            "red": (229, 57, 53),
+            "crimson": (211, 47, 47),
+            "green": (67, 160, 71),
+            "emerald": (46, 125, 50),
+            "blue": (30, 136, 229),
+            "indigo": (57, 73, 171),
+            "yellow": (253, 216, 53),
+            "amber": (255, 179, 0),
+            "orange": (251, 140, 0),
+            "purple": (142, 36, 170),
+            "cyan": (0, 172, 193),
+            "teal": (0, 137, 123),
+            "pink": (216, 27, 96),
+            "white": (255, 255, 255),
+            "black": (33, 33, 33),
+        }
+
+        c_clean = (color_name or "red").lower().strip()
+        if c_clean.startswith("#") and len(c_clean) in (4, 7):
+            hex_c = c_clean.lstrip("#")
+            if len(hex_c) == 3:
+                hex_c = "".join(c * 2 for c in hex_c)
+            color_rgb = (int(hex_c[0:2], 16), int(hex_c[2:4], 16), int(hex_c[4:6], 16))
+        else:
+            color_rgb = color_map.get(c_clean, (229, 57, 53))
+
+        x1, y1, x2, y2 = box
+        if x1 > x2:
+            x1, x2 = x2, x1
+        if y1 > y2:
+            y1, y2 = y2, y1
+
+        shape_lower = (shape or "box").lower()
+        out_img = img.copy()
+
+        if shape_lower in ("box", "rect", "rectangle", "bounding_box"):
+            if fill_alpha > 0:
+                overlay = Image.new("RGBA", out_img.size, (0, 0, 0, 0))
+                ov_draw = ImageDraw.Draw(overlay)
+                ov_draw.rounded_rectangle([x1, y1, x2, y2], radius=6, fill=(*color_rgb, fill_alpha))
+                out_img = Image.alpha_composite(out_img.convert("RGBA"), overlay).convert("RGB")
+
+            draw = ImageDraw.Draw(out_img)
+            draw.rounded_rectangle([x1, y1, x2, y2], radius=6, outline=color_rgb, width=stroke_width)
+
+            if label:
+                badge_h = 24
+                badge_pad = 8
+                text_w = len(label) * 8 + badge_pad * 2
+                bx1 = x1
+                by1 = max(0, y1 - badge_h - 4)
+                bx2 = bx1 + text_w
+                by2 = by1 + badge_h
+                draw.rounded_rectangle([bx1, by1, bx2, by2], radius=4, fill=color_rgb)
+                text_color = (255, 255, 255) if c_clean not in ("yellow", "white") else (33, 33, 33)
+                draw.text((bx1 + badge_pad, by1 + 4), label, fill=text_color)
+
+        elif shape_lower in ("arrow", "pointer"):
+            draw = ImageDraw.Draw(out_img)
+            to_pt = arrow_to or ((x1 + x2) // 2, (y1 + y2) // 2)
+            from_pt = arrow_from or (to_pt[0] + 100, max(0, to_pt[1] - 80))
+
+            draw.line([from_pt, to_pt], fill=color_rgb, width=stroke_width)
+            dx = to_pt[0] - from_pt[0]
+            dy = to_pt[1] - from_pt[1]
+            angle = math.atan2(dy, dx)
+            head_len = max(16, stroke_width * 4)
+            p1 = (int(to_pt[0] - head_len * math.cos(angle - math.pi / 6)), int(to_pt[1] - head_len * math.sin(angle - math.pi / 6)))
+            p2 = (int(to_pt[0] - head_len * math.cos(angle + math.pi / 6)), int(to_pt[1] - head_len * math.sin(angle + math.pi / 6)))
+            draw.polygon([to_pt, p1, p2], fill=color_rgb)
+
+        elif shape_lower in ("highlight", "marker"):
+            overlay = Image.new("RGBA", out_img.size, (0, 0, 0, 0))
+            ov_draw = ImageDraw.Draw(overlay)
+            ov_draw.rectangle([x1, y1, x2, y2], fill=(*color_rgb, 100))
+            out_img = Image.alpha_composite(out_img.convert("RGBA"), overlay).convert("RGB")
+
+        elif shape_lower in ("circle", "ellipse"):
+            draw = ImageDraw.Draw(out_img)
+            draw.ellipse([x1, y1, x2, y2], outline=color_rgb, width=stroke_width)
+
+        return out_img
 
     async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
         action = arguments.get("action", "").lower().strip()
@@ -3802,14 +4070,231 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                     },
                 )
 
-            elif action in ("snipping_tool", "capture_region", "screen_clip"):
-                subprocess.Popen(["cmd.exe", "/c", "start", "ms-screenclip:"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            elif action in ("snip_screen", "vision_snip", "region_crop", "snipping_tool", "capture_region", "screen_clip"):
+                target = arguments.get("target") or arguments.get("region") or arguments.get("window")
+                explicit_box = arguments.get("box") or arguments.get("bbox")
+                search_fix = bool(arguments.get("search_fix", False))
+                out_path_arg = arguments.get("path") or arguments.get("output_path") or arguments.get("file")
+                open_app = arguments.get("open_in_app", True)
+
+                # 1. Interactive selection if explicitly requested or if bare snipping_tool call without target/box
+                if target and target.lower() in ("interactive", "manual", "overlay", "user"):
+                    subprocess.Popen(["cmd.exe", "/c", "start", "ms-screenclip:"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return ToolResult(
+                        success=True,
+                        data={
+                            "action": "snip_screen",
+                            "mode": "interactive",
+                            "status": "active (ms-screenclip: launched)",
+                            "app": "Windows Snip & Sketch overlay",
+                            "note": "Native Windows Snip & Sketch overlay launched for interactive region selection.",
+                        },
+                    )
+
+                if not target and not explicit_box and action in ("snipping_tool", "screen_clip"):
+                    subprocess.Popen(["cmd.exe", "/c", "start", "ms-screenclip:"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return ToolResult(
+                        success=True,
+                        data={
+                            "action": "snipping_tool",
+                            "status": "active (ms-screenclip: launched)",
+                            "app": "Windows Snip & Sketch",
+                            "note": "Native Windows Snip & Sketch launched.",
+                        },
+                    )
+
+                # Auto-detect if search fix was requested in target string
+                if target and ("search fix" in target.lower() or "find fix" in target.lower() or "fix" in target.lower()):
+                    search_fix = True
+                    target = re.sub(r"(?i)\s*(and\s*)?(search|find)\s*fix\s*", "", target).strip()
+                    if not target:
+                        target = "error popup"
+
+                # 2. Capture desktop screen
+                desktop_img = self._capture_desktop_pil()
+                if not desktop_img:
+                    subprocess.Popen(["cmd.exe", "/c", "start", "ms-screenclip:"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    return ToolResult(
+                        success=True,
+                        data={
+                            "action": "snip_screen",
+                            "status": "launched ms-screenclip:",
+                            "note": "Launched Windows Snip & Sketch overlay for screen capture.",
+                        },
+                    )
+
+                # 3. Locate target bounding box
+                (x1, y1, x2, y2), source = await self._locate_target_region(desktop_img, target, explicit_box)
+
+                # 4. Crop image
+                cropped = desktop_img.crop((x1, y1, x2, y2))
+
+                # 5. Resolve destination path (uses user's real Downloads folder by default)
+                downloads_dir = Path.home() / "Downloads"
+                if out_path_arg:
+                    p = Path(out_path_arg)
+                    if p.parts and p.parts[0].lower() == "downloads":
+                        out_file = downloads_dir / Path(*p.parts[1:])
+                    elif p.is_absolute():
+                        out_file = p
+                    else:
+                        out_file = base_dir / p
+                else:
+                    target_tag = re.sub(r"[^\w\-]+", "_", (target or "screen").lower()).strip("_")
+                    out_file = downloads_dir / f"snip_{target_tag}.png"
+
+                out_file.parent.mkdir(parents=True, exist_ok=True)
+                cropped.save(out_file, "PNG")
+
+                # 6. Copy to clipboard (CF_DIB so user can paste immediately)
+                copied = self._copy_image_to_clipboard(cropped)
+
+                # 7. Open in Snip & Sketch (SnippingTool.exe)
+                opened_app = None
+                if open_app:
+                    self._open_in_snip_and_sketch(out_file)
+                    opened_app = "Windows Snipping Tool (Snip & Sketch)"
+
+                # 8. Web fix search if requested
+                error_detected = None
+                fix_summary = None
+                if search_fix:
+                    try:
+                        buf = io.BytesIO()
+                        cropped.save(buf, format="JPEG", quality=90)
+                        crop_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                        from nemo.ai.providers.nvidia import NvidiaNimProvider
+                        provider = NvidiaNimProvider()
+                        extracted = await provider.analyze_image(
+                            image_base64=crop_b64,
+                            prompt="Read verbatim all error messages, exception types, and technical details from this cropped screen snip.",
+                        )
+                        error_detected = extracted.strip()
+
+                        if error_detected:
+                            researcher = WebResearcherTool()
+                            query_clean = re.sub(r"[^a-zA-Z0-9\s\.\_\-]", " ", error_detected)[:120].strip()
+                            web_res = await researcher.execute({"action": "search", "query": f"{query_clean} fix solution", "max_results": 3}, context)
+                            if web_res.success and web_res.data.get("results"):
+                                top_res = web_res.data["results"][0]
+                                fix_summary = f"{top_res.get('title')}: {top_res.get('snippet')}"
+                    except Exception as e:
+                        fix_summary = f"Could not query web fix: {e}"
+
+                res_data = {
+                    "action": "snip_screen",
+                    "file": str(out_file),
+                    "target": target,
+                    "bounding_box": [x1, y1, x2, y2],
+                    "dimensions": f"{x2 - x1}x{y2 - y1}",
+                    "detection_source": source,
+                    "copied_to_clipboard": copied,
+                    "app": opened_app,
+                    "note": f"Region snipped, saved to {out_file.name}, copied to clipboard, and opened in Snip & Sketch.",
+                }
+                if error_detected:
+                    res_data["error_detected"] = error_detected
+                if fix_summary:
+                    res_data["fix_solution"] = fix_summary
+
+                return ToolResult(success=True, data=res_data)
+
+            elif action in ("annotate_image", "visual_markup", "draw_annotation"):
+                path_arg = arguments.get("path") or arguments.get("file") or arguments.get("image")
+                shape = arguments.get("shape", "box")
+                color = arguments.get("color", "red")
+                target = arguments.get("target")
+                explicit_box = arguments.get("box") or arguments.get("bbox")
+                label = arguments.get("label") or (target.title() if target and shape in ("box", "rect") else None)
+                arrow_from = arguments.get("arrow_from")
+                arrow_to = arguments.get("arrow_to")
+                out_path_arg = arguments.get("output_path") or arguments.get("out")
+                open_app = arguments.get("open_in_app", True)
+
+                # 1. Load or capture image
+                src_img = None
+                src_path = None
+                if path_arg and path_arg.lower() not in ("screen", "desktop"):
+                    p = base_dir / path_arg
+                    if p.exists():
+                        src_path = p
+                    elif Path(path_arg).exists():
+                        src_path = Path(path_arg)
+                    elif (Path.home() / "Downloads" / path_arg).exists():
+                        src_path = Path.home() / "Downloads" / path_arg
+
+                    if src_path:
+                        try:
+                            src_img = Image.open(src_path).convert("RGB")
+                        except Exception:
+                            src_img = None
+                    elif "screenshot" in path_arg.lower():
+                        src_img = self._capture_desktop_pil()
+                        if src_img:
+                            src_path = base_dir / path_arg
+                            src_img.save(src_path, "PNG")
+
+                if not src_img:
+                    src_img = self._capture_desktop_pil()
+                    src_path = Path.home() / "Downloads" / "screenshot.png"
+                    if src_img:
+                        src_img.save(src_path, "PNG")
+
+                if not src_img:
+                    return ToolResult(success=False, error="Could not load or capture target image for annotation.")
+
+                # 2. Locate target bounding box
+                (x1, y1, x2, y2), source = await self._locate_target_region(src_img, target, explicit_box)
+
+                # 3. Draw shapes properly
+                annotated = self._draw_proper_shapes(
+                    img=src_img,
+                    shape=shape,
+                    color_name=color,
+                    box=(x1, y1, x2, y2),
+                    label=label,
+                    arrow_from=tuple(arrow_from) if arrow_from and len(arrow_from) == 2 else None,
+                    arrow_to=tuple(arrow_to) if arrow_to and len(arrow_to) == 2 else None,
+                    stroke_width=int(arguments.get("width", 4)),
+                    fill_alpha=int(arguments.get("fill_alpha", 25 if shape in ("box", "rect") else 0)),
+                )
+
+                # 4. Resolve output path
+                if out_path_arg:
+                    out_file = Path(out_path_arg)
+                    if not out_file.is_absolute():
+                        out_file = base_dir / out_file
+                elif src_path:
+                    out_file = src_path.with_name(f"{src_path.stem}_annotated.png")
+                else:
+                    out_file = Path.home() / "Downloads" / "annotated_image.png"
+
+                out_file.parent.mkdir(parents=True, exist_ok=True)
+                annotated.save(out_file, "PNG")
+
+                # 5. Copy to clipboard
+                copied = self._copy_image_to_clipboard(annotated)
+
+                # 6. Open in Snip & Sketch (SnippingTool.exe)
+                opened_app = None
+                if open_app:
+                    self._open_in_snip_and_sketch(out_file)
+                    opened_app = "Windows Snipping Tool (Snip & Sketch)"
+
+                shape_name = "bounding box" if shape in ("box", "rect") else shape
                 return ToolResult(
                     success=True,
                     data={
-                        "action": "snipping_tool",
-                        "status": "active (ms-screenclip: launched)",
-                        "note": "Native Windows Snipping Tool overlay launched for region screenshot selection.",
+                        "action": "annotate_image",
+                        "shape": shape,
+                        "color": color,
+                        "target": target,
+                        "bounding_box": [x1, y1, x2, y2],
+                        "file": str(out_file),
+                        "copied_to_clipboard": copied,
+                        "app": opened_app,
+                        "detection_source": source,
+                        "note": f"{color.capitalize()} {shape_name} drawn properly around {target or 'target region'}, saved to {out_file.name}, and opened in Snip & Sketch.",
                     },
                 )
 
@@ -4912,6 +5397,10 @@ class WindowsGuiTool(BaseTool):
             elif action in ("paint_draw", "draw_shape", "draw_in_paint"):
                 dt = WindowsDesktopTool()
                 return await dt.execute({"action": "paint_draw", **arguments}, context)
+
+            elif action in ("snip_screen", "vision_snip", "region_crop", "snipping_tool", "annotate_image", "visual_markup", "draw_annotation"):
+                dt = WindowsDesktopTool()
+                return await dt.execute(arguments, context)
 
             else:
                 return ToolResult(success=False, error=f"Unsupported gui action: '{action}'")

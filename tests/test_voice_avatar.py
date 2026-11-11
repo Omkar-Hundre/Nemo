@@ -5,6 +5,7 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 # 2. Third-party imports
+from PIL import Image
 import pytest
 
 # 3. Local imports
@@ -197,3 +198,99 @@ class TestPaintDrawTool:
             assert res.success is True
             assert "watch?v=dQw4w9WgXcQ&autoplay=1" in res.data["url"]
             assert res.data["status"] == "playing"
+
+
+class TestVisionSnipAndAnnotate:
+    @pytest.mark.asyncio
+    async def test_snip_screen_with_explicit_box(self, tmp_path):
+        tool = WindowsDesktopTool()
+        dummy_img = Image.new("RGB", (800, 600), color="white")
+        out_file = tmp_path / "snip_test.png"
+
+        with patch.object(WindowsDesktopTool, "_capture_desktop_pil", return_value=dummy_img), \
+             patch.object(WindowsDesktopTool, "_copy_image_to_clipboard", return_value=True), \
+             patch.object(WindowsDesktopTool, "_open_in_snip_and_sketch") as mock_open:
+            res = await tool.execute({
+                "action": "snip_screen",
+                "box": [50, 50, 250, 150],
+                "path": str(out_file),
+            }, {"working_directory": tmp_path})
+
+            assert res.success is True
+            assert out_file.exists()
+            assert res.data["copied_to_clipboard"] is True
+            assert mock_open.called
+            cropped = Image.open(out_file)
+            assert cropped.size == (200, 100)
+
+    @pytest.mark.asyncio
+    async def test_snip_screen_interactive(self):
+        tool = WindowsDesktopTool()
+        with patch("subprocess.Popen") as mock_popen:
+            res = await tool.execute({
+                "action": "snip_screen",
+                "target": "interactive",
+            }, {})
+            assert res.success is True
+            assert res.data["mode"] == "interactive"
+            assert mock_popen.called
+
+    @pytest.mark.asyncio
+    async def test_annotate_image_proper_box(self, tmp_path):
+        tool = WindowsDesktopTool()
+        src_file = tmp_path / "button.png"
+        dummy = Image.new("RGB", (400, 300), color="white")
+        dummy.save(src_file)
+
+        with patch.object(WindowsDesktopTool, "_copy_image_to_clipboard", return_value=True), \
+             patch.object(WindowsDesktopTool, "_open_in_snip_and_sketch") as mock_open:
+            res = await tool.execute({
+                "action": "annotate_image",
+                "path": str(src_file),
+                "shape": "box",
+                "color": "red",
+                "box": [40, 50, 200, 120],
+                "label": "Submit",
+            }, {"working_directory": tmp_path})
+
+            assert res.success is True
+            assert res.data["shape"] == "box"
+            assert res.data["copied_to_clipboard"] is True
+            assert mock_open.called
+            from pathlib import Path
+            ann_path = Path(res.data["file"])
+            assert ann_path.exists()
+            ann_img = Image.open(ann_path)
+            assert ann_img.size == (400, 300)
+
+    @pytest.mark.asyncio
+    async def test_annotate_image_arrow_and_highlight(self, tmp_path):
+        tool = WindowsDesktopTool()
+        src_file = tmp_path / "app.png"
+        dummy = Image.new("RGB", (500, 400), color="white")
+        dummy.save(src_file)
+
+        with patch.object(WindowsDesktopTool, "_copy_image_to_clipboard", return_value=True), \
+             patch.object(WindowsDesktopTool, "_open_in_snip_and_sketch"):
+            # Arrow
+            res_arrow = await tool.execute({
+                "action": "annotate_image",
+                "path": str(src_file),
+                "shape": "arrow",
+                "color": "blue",
+                "arrow_from": [300, 100],
+                "arrow_to": [150, 150],
+            }, {"working_directory": tmp_path})
+            assert res_arrow.success is True
+            assert res_arrow.data["shape"] == "arrow"
+
+            # Highlight
+            res_hi = await tool.execute({
+                "action": "annotate_image",
+                "path": str(src_file),
+                "shape": "highlight",
+                "color": "yellow",
+                "box": [20, 30, 200, 80],
+            }, {"working_directory": tmp_path})
+            assert res_hi.success is True
+            assert res_hi.data["shape"] == "highlight"

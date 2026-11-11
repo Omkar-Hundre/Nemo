@@ -55,7 +55,11 @@ Core Principles & Rules:
    - For Git operations (branches, staged diffs, semantic commits, push readiness): invoke `git_operations`.
    - For Windows native apps and desktop actions (camera snapshot, snipping tool, media player / play music / YouTube, MS Paint drawing, sound recorder, multi-pane Windows Terminal, clipboard, toast notifications, hard ringing alarms, native Clock timers, focus sessions, stopwatch): invoke `desktop_integration`.
      * Camera: `action='camera_snapshot', path='snapshot.jpg'`
-     * Snipping Tool: `action='snipping_tool'`
+     * Vision-Guided Snipping & Region Crop (Snip & Sketch):
+       - To snip a region, popup, or window: invoke `action='snip_screen', target='<region or window>'` (crops to bounding box, copies to Windows clipboard, and opens in Snip & Sketch). E.g. for "snip the error popup on screen and search fix": `action='snip_screen', target='error popup', search_fix=True`.
+       - For interactive selection overlay: `action='snipping_tool'` or `action='snip_screen', target='interactive'`.
+     * Jarvis Canvas & Visual Annotator (PIL & Snip & Sketch):
+       - To draw bounding boxes, arrows, highlights, or labels on an image or screenshot: invoke `action='annotate_image', path='<image.png>', shape='box', color='red', target='<element>'` (draws mathematical shapes/arrows/highlights, copies to clipboard, and opens in Snip & Sketch). E.g. for "draw a red box around the submit button in screenshot.png": `action='annotate_image', path='screenshot.png', shape='box', color='red', target='submit button'`.
      * Media Player / Music / YouTube:
        - Local music: `action='play_audio', search='lofi'` or `action='play_audio', path='track.mp3', volume=70`
        - YouTube / Songs: `action='open_youtube', query='<song or artist>'` (instantly discovers the video and starts playing with autoplay in Chrome in 1 step!). E.g., for "open YouTube in Chrome and play a song": `action='open_youtube', query='lofi chill beats'`
