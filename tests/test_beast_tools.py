@@ -367,6 +367,43 @@ async def test_database_inspector_path_security(sample_sqlite_db):
     assert "access denied" in res.error.lower()
 
 
+@pytest.mark.asyncio
+async def test_database_inspector_nemo_db_auto_resolve():
+    """Verify database_inspector permits and auto-resolves ~/.nemo/nemo.db."""
+    from nemo.agent.orchestrator import extract_json_block
+    nemo_db_path = Path.home() / ".nemo" / "nemo.db"
+    if not nemo_db_path.exists():
+        pytest.skip("~/.nemo/nemo.db does not exist on this machine.")
+
+    tool = DatabaseExplorerTool()
+    # 1. Explicit path with tilde
+    res = await tool.execute(
+        {"path": "~/.nemo/nemo.db", "action": "list_tables"},
+        {"working_directory": str(Path.cwd())},
+    )
+    assert res.success is True
+    table_names = [t["name"] for t in res.data["tables"]]
+    assert "conversations" in table_names or "projects" in table_names
+
+    # 2. Auto-resolution when passing "nemo.db"
+    res_auto = await tool.execute(
+        {"path": "nemo.db", "action": "list_tables"},
+        {"working_directory": str(Path.cwd())},
+    )
+    assert res_auto.success is True
+
+    # 3. Test extract_json_block with raw newlines in answer
+    raw_llm_json = """{
+      "thought": "Direct inspection succeeded",
+      "action": "finish",
+      "answer": "# Nemo Tables Report\n\n- Table: conversations\n- Rows: 43"
+    }"""
+    parsed = extract_json_block(raw_llm_json)
+    assert parsed is not None
+    assert parsed["action"] == "finish"
+    assert "conversations" in parsed["answer"]
+
+
 # ============================================================================
 # 3. ApiTesterTool Tests
 # ============================================================================

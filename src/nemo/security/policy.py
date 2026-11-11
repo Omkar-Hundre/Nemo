@@ -43,9 +43,14 @@ class SecurityPolicy:
             except ValueError:
                 continue
 
-        # Allow user working directories (Downloads, Desktop, Documents)
+        # Allow user working directories (Downloads, Desktop, Documents) and Nemo state directory (~/.nemo)
         user_home = Path.home()
-        for u_dir in (user_home / "Downloads", user_home / "Desktop", user_home / "Documents"):
+        for u_dir in (
+            user_home / "Downloads",
+            user_home / "Desktop",
+            user_home / "Documents",
+            user_home / ".nemo",
+        ):
             try:
                 target.relative_to(u_dir)
                 return True

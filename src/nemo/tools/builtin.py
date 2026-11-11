@@ -2389,7 +2389,7 @@ class DatabaseExplorerTool(BaseTool):
             parameters={
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Database file path (e.g. 'nemo.db', 'data/app.db')."},
+                    "path": {"type": "string", "description": "Database file path (e.g. '~/.nemo/nemo.db', 'nemo.db', 'data/app.db')."},
                     "action": {
                         "type": "string",
                         "enum": ["list_tables", "schema", "query"],
@@ -2407,12 +2407,18 @@ class DatabaseExplorerTool(BaseTool):
 
     async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
         base_dir = Path(context.get("working_directory", Path.cwd()))
-        raw_path = arguments.get("path", "")
+        raw_path = str(arguments.get("path", "")).strip()
         if not raw_path:
-            return ToolResult(success=False, error="path is required.")
+            raw_path = "~/.nemo/nemo.db"
 
-        p_str = str(raw_path).replace("$env:USERPROFILE", str(Path.home())).replace("~", str(Path.home()))
+        p_str = raw_path.replace("$env:USERPROFILE", str(Path.home())).replace("~", str(Path.home()))
         db_path = (base_dir / p_str).resolve() if not Path(p_str).is_absolute() else Path(p_str).resolve()
+
+        # Ponytail: Auto-resolve to ~/.nemo/nemo.db if database is nemo and not present in working directory
+        if not db_path.exists() and ("nemo" in raw_path.lower() or raw_path in ("nemo.db", "nemo", ".nemo/nemo.db")):
+            nemo_home_db = (Path.home() / ".nemo" / "nemo.db").resolve()
+            if nemo_home_db.exists():
+                db_path = nemo_home_db
 
         if not self.policy.is_path_safe(db_path, base_dir=base_dir):
             return ToolResult(success=False, error=f"Access denied: database path outside allowed boundary ({db_path})")

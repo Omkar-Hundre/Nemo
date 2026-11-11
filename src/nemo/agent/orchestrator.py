@@ -49,6 +49,12 @@ Core Principles & Rules:
    - For presentations: invoke `generate_presentation` (HTML slide deck with keyboard arrows).
    - For environment variables & missing secrets: invoke `inspect_env_config`.
    - For inspecting code modifications before declaring completion: invoke `git_diff`.
+   - For SQLite database introspection, listing tables, and running queries: invoke `database_inspector`. For Nemo's internal database, pass `path: '~/.nemo/nemo.db'`.
+   - For testing REST/HTTP endpoints, webhooks, or API latency: invoke `api_tester`.
+   - For live hardware metrics (CPU, RAM, disk), listening ports, or process management: invoke `system_inspector`.
+   - For Git operations (branches, staged diffs, semantic commits, push readiness): invoke `git_operations`.
+   - For Windows clipboard copy/paste or toast notifications: invoke `desktop_integration`.
+   - For web search, technical documentation scraping, package info, or online research: invoke `web_researcher`.
    - Never traverse folders recursively with `list_directory` when search or summary tools exist.
 5. CONVERSATIONAL & PATH CONTINUITY: If the user says 'that folder', 'that file', or references a previous step, resolve the path to the exact target folder/file referenced in Recent Context above, rather than defaulting to the current root.
 6. RESPONSE FORMAT: Output EXACTLY ONE JSON block:
@@ -76,17 +82,29 @@ Output pure valid JSON. No conversational preamble before the JSON block.
 # 5. Core logic / classes / functions
 def extract_json_block(text: str) -> dict[str, Any] | None:
     """Extract and parse first valid JSON block from text."""
-    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    candidate = match.group(1) if match else text.strip()
+    text_clean = text.strip()
+    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text_clean, re.DOTALL)
+    candidate = match.group(1) if match else text_clean
     try:
         return json.loads(candidate, strict=False)
     except Exception:
-        match_obj = re.search(r"(\{.*\})", text, re.DOTALL)
-        if match_obj:
-            try:
-                return json.loads(match_obj.group(1), strict=False)
-            except Exception:
-                pass
+        pass
+
+    match_obj = re.search(r"(\{.*\})", text_clean, re.DOTALL)
+    if match_obj:
+        try:
+            return json.loads(match_obj.group(1), strict=False)
+        except Exception:
+            pass
+
+    # Ponytail: Robust fallback for LLM finish actions where "answer" has unescaped raw newlines or quotes
+    if '"action"' in text_clean and '"finish"' in text_clean and '"answer"' in text_clean:
+        ans_match = re.search(r'"answer"\s*:\s*"(.*)', text_clean, re.DOTALL)
+        if ans_match:
+            raw_val = ans_match.group(1)
+            raw_val = re.sub(r'"\s*\}*\s*$', "", raw_val)
+            return {"action": "finish", "answer": raw_val.strip()}
+
     return None
 
 
@@ -303,7 +321,11 @@ class AgentOrchestrator:
             messages.append(ChatMessage(role="user", content=synthesis_prompt))
             final_res = await self.provider.generate(messages, temperature=0.3, max_tokens=3000)
             state.completed = True
-            state.final_answer = final_res.content
+            parsed_final = extract_json_block(final_res.content)
+            if parsed_final and "answer" in parsed_final:
+                state.final_answer = parsed_final["answer"]
+            else:
+                state.final_answer = final_res.content
 
         # Automated Memory Consolidation: Extract durable technical facts from completed task
         if state.completed and state.final_answer:
