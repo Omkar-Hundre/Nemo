@@ -3437,8 +3437,13 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                     },
                     "shape": {
                         "type": "string",
-                        "enum": ["square", "rectangle", "circle", "triangle", "star"],
-                        "description": "Shape to draw in Microsoft Paint (for 'paint_draw').",
+                        "enum": ["square", "rectangle", "circle", "triangle", "triangle_over", "roof", "hut", "house", "star"],
+                        "description": "Shape to draw in Microsoft Paint (for 'paint_draw'). Use 'triangle_over' to draw a roof over a square, or 'hut' for a full house.",
+                    },
+                    "position": {
+                        "type": "string",
+                        "enum": ["center", "over", "top", "under", "bottom"],
+                        "description": "Position relative to canvas or previous shape (default 'center').",
                     },
                     "size": {
                         "type": "integer",
@@ -3884,6 +3889,7 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                 shape = str(arguments.get("shape") or "square").lower().strip()
                 size = int(arguments.get("size") or 240)
                 color = str(arguments.get("color") or "black").lower().strip()
+                position = str(arguments.get("position") or "center").lower().strip()
 
                 # Ensure access to interactive desktop
                 try:
@@ -3900,15 +3906,15 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                     def _find_paint(h, _):
                         nonlocal paint_hwnd
                         if win32gui.IsWindowVisible(h):
-                            cls = win32gui.GetClassName(h)
                             txt = win32gui.GetWindowText(h)
-                            if "Paint" in txt or cls == "MSPaintApp":
+                            cls = win32gui.GetClassName(h)
+                            if "paint" in txt.lower() or cls == "MSPaintApp":
                                 paint_hwnd = h
                     win32gui.EnumWindows(_find_paint, None)
 
                 if not paint_hwnd:
-                    proc = subprocess.Popen(["mspaint.exe"])
-                    await asyncio.sleep(1.2)
+                    subprocess.Popen(["cmd.exe", "/c", "start", "mspaint.exe"], shell=False)
+                    await asyncio.sleep(2.0)
                     if win32gui:
                         win32gui.EnumWindows(_find_paint, None)
 
@@ -3916,88 +3922,170 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                     try:
                         win32gui.ShowWindow(paint_hwnd, win32con.SW_RESTORE)
                         win32gui.SetForegroundWindow(paint_hwnd)
-                        await asyncio.sleep(0.3)
+                        await asyncio.sleep(0.4)
                         rect = win32gui.GetWindowRect(paint_hwnd)
                         w_left, w_top, w_right, w_bottom = rect
                     except Exception:
-                        w_left, w_top = 100, 100
+                        w_left, w_top = 150, 100
                         w_right, w_bottom = 1200, 800
                 else:
-                    w_left, w_top = 100, 100
+                    w_left, w_top = 150, 100
                     w_right, w_bottom = 1200, 800
 
-                # Canvas center (Paint ribbon is ~180px high at the top)
+                # Canvas center (ribbon is ~160px high)
                 cx = w_left + (w_right - w_left) // 2
-                cy = w_top + 200 + max(100, (w_bottom - w_top - 200) // 2)
+                cy = w_top + 180 + max(120, (w_bottom - w_top - 180) // 2)
 
-                # Generate shape path
-                points = []
+                # Adjust center if position is "over" / "top"
+                if position in ("over", "top") or "over" in shape:
+                    cy = cy - size // 2
+
+                # Screen resolution for normalized absolute mouse events
+                screen_w = win32api.GetSystemMetrics(win32con.SM_CXSCREEN) if win32api else 1920
+                screen_h = win32api.GetSystemMetrics(win32con.SM_CYSCREEN) if win32api else 1080
+
+                # Ensure canvas focus and pen tool
+                if win32api:
+                    win32api.SetCursorPos((cx, cy))
+                    nx = int(cx * 65535 / (screen_w - 1))
+                    ny = int(cy * 65535 / (screen_h - 1))
+                    win32api.mouse_event(win32con.MOUSEEVENTF_MOVE | win32con.MOUSEEVENTF_ABSOLUTE, nx, ny, 0, 0)
+                    await asyncio.sleep(0.08)
+                    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                    await asyncio.sleep(0.02)
+                    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                    await asyncio.sleep(0.1)
+
+                # Build stroke paths: list of list of (x, y)
+                strokes: list[list[tuple[int, int]]] = []
+                half = size // 2
+
                 if shape in ("square", "rect", "rectangle"):
                     w = size
                     h = size if shape == "square" else int(size * 0.65)
-                    half_w = w // 2
-                    half_h = h // 2
-                    points = [
-                        (cx - half_w, cy - half_h),
-                        (cx + half_w, cy - half_h),
-                        (cx + half_w, cy + half_h),
-                        (cx - half_w, cy + half_h),
-                        (cx - half_w, cy - half_h),
+                    hw, hh = w // 2, h // 2
+                    strokes.append([
+                        (cx - hw, cy - hh),
+                        (cx + hw, cy - hh),
+                        (cx + hw, cy + hh),
+                        (cx - hw, cy + hh),
+                        (cx - hw, cy - hh),
+                    ])
+
+                elif shape in ("triangle_over", "roof") or (shape == "triangle" and position in ("over", "top")):
+                    # Triangle sitting directly on top of square base
+                    roof_top = cy - half - int(size * 0.6)
+                    strokes.append([
+                        (cx - half, cy - half),
+                        (cx, roof_top),
+                        (cx + half, cy - half),
+                        (cx - half, cy - half),
+                    ])
+
+                elif shape == "triangle":
+                    strokes.append([
+                        (cx, cy - half),
+                        (cx + half, cy + half),
+                        (cx - half, cy + half),
+                        (cx, cy - half),
+                    ])
+
+                elif shape in ("hut", "house"):
+                    # Complete hut in 3 clean strokes
+                    roof_top = cy - half - int(size * 0.55)
+                    # 1. Base square
+                    base = [
+                        (cx - half, cy - half),
+                        (cx + half, cy - half),
+                        (cx + half, cy + half),
+                        (cx - half, cy + half),
+                        (cx - half, cy - half),
                     ]
+                    # 2. Roof triangle
+                    roof = [
+                        (cx - half, cy - half),
+                        (cx, roof_top),
+                        (cx + half, cy - half),
+                    ]
+                    # 3. Door
+                    door_w = half // 3
+                    door_h = int(half * 0.8)
+                    bottom_y = cy + half
+                    door = [
+                        (cx - door_w, bottom_y),
+                        (cx - door_w, bottom_y - door_h),
+                        (cx + door_w, bottom_y - door_h),
+                        (cx + door_w, bottom_y),
+                    ]
+                    strokes = [base, roof, door]
+
                 elif shape == "circle":
                     import math
-                    r = size // 2
+                    pts = []
                     for deg in range(0, 365, 10):
                         rad = math.radians(deg)
-                        points.append((int(cx + r * math.cos(rad)), int(cy + r * math.sin(rad))))
-                elif shape == "triangle":
-                    h = size // 2
-                    points = [
-                        (cx, cy - h),
-                        (cx + h, cy + h),
-                        (cx - h, cy + h),
-                        (cx, cy - h),
-                    ]
+                        pts.append((int(cx + half * math.cos(rad)), int(cy + half * math.sin(rad))))
+                    strokes.append(pts)
+
                 elif shape == "star":
                     import math
-                    r_outer = size // 2
-                    r_inner = r_outer // 2
+                    pts = []
+                    r_out = half
+                    r_in = half // 2
                     for i in range(11):
                         angle = i * (math.pi / 5) - (math.pi / 2)
-                        r = r_outer if i % 2 == 0 else r_inner
-                        points.append((int(cx + r * math.cos(angle)), int(cy + r * math.sin(angle))))
+                        r = r_out if i % 2 == 0 else r_in
+                        pts.append((int(cx + r * math.cos(angle)), int(cy + r * math.sin(angle))))
+                    strokes.append(pts)
+
                 else:
-                    points = [(cx - size // 2, cy), (cx + size // 2, cy)]
+                    strokes.append([(cx - half, cy), (cx + half, cy)])
 
-                # Smoothly drag mouse across all edges with LEFTDOWN
+                # Execute all strokes with hardware-level mouse dragging
                 if win32api:
-                    p0 = points[0]
-                    win32api.SetCursorPos(p0)
-                    await asyncio.sleep(0.08)
-                    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-                    await asyncio.sleep(0.03)
+                    for stroke in strokes:
+                        if not stroke:
+                            continue
+                        sx, sy = stroke[0]
+                        # 1. Move to stroke origin
+                        nx = int(sx * 65535 / (screen_w - 1))
+                        ny = int(sy * 65535 / (screen_h - 1))
+                        win32api.SetCursorPos((sx, sy))
+                        win32api.mouse_event(win32con.MOUSEEVENTF_MOVE | win32con.MOUSEEVENTF_ABSOLUTE, nx, ny, 0, 0)
+                        await asyncio.sleep(0.06)
 
-                    for i in range(len(points) - 1):
-                        x1, y1 = points[i]
-                        x2, y2 = points[i + 1]
-                        steps = 30
-                        for s in range(1, steps + 1):
-                            cur_x = int(x1 + (x2 - x1) * (s / steps))
-                            cur_y = int(y1 + (y2 - y1) * (s / steps))
-                            win32api.SetCursorPos((cur_x, cur_y))
-                            await asyncio.sleep(0.007)
+                        # 2. Mouse LEFTDOWN
+                        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                        await asyncio.sleep(0.03)
 
-                    await asyncio.sleep(0.03)
-                    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                        # 3. Continuous interpolated dragging with MOUSEEVENTF_MOVE
+                        for i in range(len(stroke) - 1):
+                            x1, y1 = stroke[i]
+                            x2, y2 = stroke[i + 1]
+                            dist = max(abs(x2 - x1), abs(y2 - y1))
+                            steps = max(18, min(70, dist // 3))
+                            for s in range(1, steps + 1):
+                                step_x = int(x1 + (x2 - x1) * (s / steps))
+                                step_y = int(y1 + (y2 - y1) * (s / steps))
+                                norm_x = int(step_x * 65535 / (screen_w - 1))
+                                norm_y = int(step_y * 65535 / (screen_h - 1))
+                                win32api.SetCursorPos((step_x, step_y))
+                                win32api.mouse_event(win32con.MOUSEEVENTF_MOVE | win32con.MOUSEEVENTF_ABSOLUTE, norm_x, norm_y, 0, 0)
+                                await asyncio.sleep(0.006)
 
+                        # 4. Mouse LEFTUP
+                        await asyncio.sleep(0.03)
+                        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                        await asyncio.sleep(0.08)
+
+                label = "hut" if shape in ("hut", "house") else shape.replace("_", " ")
                 return ToolResult(
                     success=True,
                     data={
                         "action": "paint_draw",
                         "shape": shape,
                         "size": size,
-                        "center": (cx, cy),
-                        "note": f"Successfully drew a crisp {shape} in Microsoft Paint at canvas position ({cx}, {cy}).",
+                        "note": f"{label.capitalize()} drawn in Paint.",
                     },
                 )
 

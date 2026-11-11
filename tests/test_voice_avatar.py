@@ -140,4 +140,19 @@ class TestPaintDrawTool:
             assert res.success is True
             assert res.data["action"] == "paint_draw"
             assert res.data["shape"] == "square"
-            assert "square" in res.data["note"]
+            assert "Square" in res.data["note"]
+
+    @pytest.mark.asyncio
+    async def test_paint_draw_hut_and_triangle_over(self):
+        tool = WindowsDesktopTool()
+        with patch("subprocess.Popen"), \
+             patch("win32gui.EnumWindows"), \
+             patch("win32api.SetCursorPos"), \
+             patch("win32api.mouse_event"):
+            res_hut = await tool.execute({"action": "paint_draw", "shape": "hut", "size": 200}, {})
+            assert res_hut.success is True
+            assert "Hut" in res_hut.data["note"]
+
+            res_tri = await tool.execute({"action": "paint_draw", "shape": "triangle_over", "size": 200}, {})
+            assert res_tri.success is True
+            assert res_tri.data["shape"] == "triangle_over"
