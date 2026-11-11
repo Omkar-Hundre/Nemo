@@ -157,6 +157,10 @@ class TestPaintDrawTool:
             assert res_tri.success is True
             assert res_tri.data["shape"] == "triangle_over"
 
+            res_heart = await tool.execute({"action": "paint_draw", "shape": "heart", "size": 200}, {})
+            assert res_heart.success is True
+            assert res_heart.data["shape"] == "heart"
+
     @pytest.mark.asyncio
     async def test_paint_svg_rasterize_and_open(self, tmp_path):
         tool = WindowsDesktopTool()

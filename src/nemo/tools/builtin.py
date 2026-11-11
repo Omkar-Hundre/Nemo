@@ -3440,8 +3440,7 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                     },
                     "shape": {
                         "type": "string",
-                        "enum": ["square", "rectangle", "circle", "triangle", "triangle_over", "roof", "hut", "house", "star"],
-                        "description": "Shape to draw in Microsoft Paint (for 'paint_draw'). Use 'triangle_over' to draw a roof over a square, or 'hut' for a full house.",
+                        "description": "Shape or object to draw in Paint with paint_draw (e.g. 'heart', 'star', 'hut', 'house', 'circle', 'square', 'triangle', 'triangle_over', 'diamond', 'rectangle').",
                     },
                     "position": {
                         "type": "string",
@@ -4095,132 +4094,52 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                         (cx, cy - half),
                     ])
 
-                if shape in ("hut", "house"):
-                    # Generate rich architectural illustration SVG with full details and rasterize to PNG for Paint
-                    hut_svg_content = '''<svg width="1000" height="750" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="skyGrad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#60b8ff" />
-      <stop offset="100%" stop-color="#cbe8ff" />
-    </linearGradient>
-    <linearGradient id="roofGrad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#b8381e" />
-      <stop offset="100%" stop-color="#6b1d0c" />
-    </linearGradient>
-    <linearGradient id="wallGrad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#f5dfc6" />
-      <stop offset="100%" stop-color="#c9a175" />
-    </linearGradient>
-    <linearGradient id="grassGrad" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#4caf50" />
-      <stop offset="100%" stop-color="#2e7d32" />
-    </linearGradient>
-  </defs>
-
-  <!-- Sky -->
-  <rect width="1000" height="750" fill="url(#skyGrad)" />
-
-  <!-- Sun -->
-  <circle cx="860" cy="110" r="50" fill="#ffd53d" />
-  <circle cx="860" cy="110" r="65" fill="#ffe57f" opacity="0.35" />
-
-  <!-- Distant Mountains -->
-  <polygon points="-50,540 200,320 450,540" fill="#9db8cc" opacity="0.75" />
-  <polygon points="220,540 500,280 800,540" fill="#8ca9bd" opacity="0.75" />
-
-  <!-- Ground / Lawn -->
-  <rect y="530" width="1000" height="220" fill="url(#grassGrad)" />
-
-  <!-- Stone Path -->
-  <path d="M 470 530 L 530 530 L 590 750 L 410 750 Z" fill="#8c867a" stroke="#69645b" stroke-width="3" />
-
-  <!-- Hut Base (Timber Walls) -->
-  <rect x="320" y="340" width="360" height="220" rx="8" fill="url(#wallGrad)" stroke="#4a2e15" stroke-width="5" />
-
-  <!-- Wall Architectural Timber Beams -->
-  <line x1="320" y1="410" x2="680" y2="410" stroke="#4a2e15" stroke-width="4" stroke-dasharray="18,6" />
-  <line x1="320" y1="480" x2="680" y2="480" stroke="#4a2e15" stroke-width="4" stroke-dasharray="18,6" />
-  <line x1="420" y1="340" x2="420" y2="560" stroke="#4a2e15" stroke-width="5" />
-  <line x1="580" y1="340" x2="580" y2="560" stroke="#4a2e15" stroke-width="5" />
-
-  <!-- Chimney and Smoke -->
-  <rect x="590" y="190" width="46" height="90" fill="#8b3a2b" stroke="#4a1c13" stroke-width="4" />
-  <ellipse cx="613" cy="165" rx="16" ry="9" fill="#e8e8e8" opacity="0.7" />
-  <ellipse cx="630" cy="135" rx="24" ry="13" fill="#e8e8e8" opacity="0.5" />
-  <ellipse cx="655" cy="100" rx="32" ry="17" fill="#e8e8e8" opacity="0.4" />
-
-  <!-- Roof (Overhang Gabled Triangle) -->
-  <polygon points="270,340 500,160 730,340" fill="url(#roofGrad)" stroke="#381007" stroke-width="6" />
-  <line x1="330" y1="290" x2="670" y2="290" stroke="#381007" stroke-width="4" />
-  <line x1="400" y1="235" x2="600" y2="235" stroke="#381007" stroke-width="4" />
-
-  <!-- Attic Vent Window -->
-  <circle cx="500" cy="255" r="22" fill="#291a10" stroke="#f5dfc6" stroke-width="3" />
-  <line x1="500" y1="233" x2="500" y2="277" stroke="#f5dfc6" stroke-width="3" />
-  <line x1="478" y1="255" x2="522" y2="255" stroke="#f5dfc6" stroke-width="3" />
-
-  <!-- Detailed Wooden Door -->
-  <rect x="455" y="415" width="90" height="145" rx="5" fill="#6d3811" stroke="#381c08" stroke-width="4" />
-  <rect x="467" y="427" width="30" height="54" fill="#542a0b" stroke="#381c08" stroke-width="1.5" />
-  <rect x="503" y="427" width="30" height="54" fill="#542a0b" stroke="#381c08" stroke-width="1.5" />
-  <rect x="467" y="491" width="30" height="58" fill="#542a0b" stroke="#381c08" stroke-width="1.5" />
-  <rect x="503" y="491" width="30" height="58" fill="#542a0b" stroke="#381c08" stroke-width="1.5" />
-  <!-- Door Knob & Keyhole -->
-  <circle cx="528" cy="497" r="5" fill="#ffd700" stroke="#8a6500" stroke-width="1.5" />
-  <!-- Stone Doorstep -->
-  <rect x="445" y="558" width="110" height="10" fill="#7a7a7a" stroke="#404040" stroke-width="2.5" />
-
-  <!-- Left Window with Shutters & Sill -->
-  <rect x="345" y="395" width="58" height="70" fill="#e6f7ff" stroke="#4a2e15" stroke-width="3.5" />
-  <line x1="374" y1="395" x2="374" y2="465" stroke="#4a2e15" stroke-width="2.5" />
-  <line x1="345" y1="430" x2="403" y2="430" stroke="#4a2e15" stroke-width="2.5" />
-  <rect x="338" y="465" width="72" height="8" fill="#381c08" />
-
-  <!-- Right Window with Shutters & Sill -->
-  <rect x="597" y="395" width="58" height="70" fill="#e6f7ff" stroke="#4a2e15" stroke-width="3.5" />
-  <line x1="626" y1="395" x2="626" y2="465" stroke="#4a2e15" stroke-width="2.5" />
-  <line x1="597" y1="430" x2="655" y2="430" stroke="#4a2e15" stroke-width="2.5" />
-  <rect x="590" y="465" width="72" height="8" fill="#381c08" />
-
-  <!-- Garden Flowers -->
-  <circle cx="355" cy="548" r="6" fill="#e91e63" />
-  <circle cx="390" cy="554" r="6" fill="#ffeb3b" />
-  <circle cx="610" cy="552" r="6" fill="#9c27b0" />
-  <circle cx="645" cy="546" r="6" fill="#ff9800" />
-</svg>'''
-                    work_dir = Path(context.get("working_directory", Path.cwd()))
-                    svg_file = work_dir / "hut.svg"
-                    png_file = work_dir / "hut.png"
-                    svg_file.write_text(hut_svg_content, encoding="utf-8")
-                    rasterized = self._rasterize_svg_to_png(svg_file)
-                    target_to_open = rasterized or png_file
-                    proc = subprocess.Popen(["mspaint.exe", str(target_to_open.resolve())])
-                    return ToolResult(
-                        success=True,
-                        data={
-                            "action": "paint_draw",
-                            "shape": "hut",
-                            "file": str(target_to_open),
-                            "pid": proc.pid,
-                            "note": "Architectural hut with timber beams, gabled roof, door, and windows opened in Paint.",
-                        },
-                    )
-
-                elif shape in ("triangle_over", "roof") or (shape == "triangle" and position in ("over", "top")):
-                    # Triangle sitting directly on top of square base
-                    roof_top = cy - half - int(size * 0.6)
-                    strokes.append([
+                elif shape in ("hut", "house"):
+                    roof_top = cy - half - int(size * 0.55)
+                    # 1. Base square walls
+                    base = [
+                        (cx - half, cy - half),
+                        (cx + half, cy - half),
+                        (cx + half, cy + half),
+                        (cx - half, cy + half),
+                        (cx - half, cy - half),
+                    ]
+                    # 2. Roof triangle
+                    roof = [
                         (cx - half, cy - half),
                         (cx, roof_top),
                         (cx + half, cy - half),
-                        (cx - half, cy - half),
-                    ])
+                    ]
+                    # 3. Door
+                    door_w = half // 3
+                    door_h = int(half * 0.8)
+                    bottom_y = cy + half
+                    door = [
+                        (cx - door_w, bottom_y),
+                        (cx - door_w, bottom_y - door_h),
+                        (cx + door_w, bottom_y - door_h),
+                        (cx + door_w, bottom_y),
+                    ]
+                    strokes = [base, roof, door]
 
-                elif shape == "triangle":
+                elif shape == "heart":
+                    import math
+                    pts = []
+                    # Parametric heart curve: x = 16*sin^3(t), y = -(13*cos(t)-5*cos(2t)-2*cos(3t)-cos(4t))
+                    scale = half / 18.0
+                    for deg in range(0, 365, 6):
+                        rad = math.radians(deg)
+                        hx = 16 * (math.sin(rad) ** 3)
+                        hy = -(13 * math.cos(rad) - 5 * math.cos(2 * rad) - 2 * math.cos(3 * rad) - math.cos(4 * rad))
+                        pts.append((int(cx + hx * scale), int(cy + hy * scale)))
+                    strokes.append(pts)
+
+                elif shape == "diamond":
                     strokes.append([
                         (cx, cy - half),
-                        (cx + half, cy + half),
-                        (cx - half, cy + half),
+                        (cx + half, cy),
+                        (cx, cy + half),
+                        (cx - half, cy),
                         (cx, cy - half),
                     ])
 

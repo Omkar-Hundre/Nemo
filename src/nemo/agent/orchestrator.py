@@ -60,10 +60,8 @@ Core Principles & Rules:
        - Local music: `action='play_audio', search='lofi'` or `action='play_audio', path='track.mp3', volume=70`
        - YouTube / Songs: `action='open_youtube', query='<song or artist>'` (instantly discovers the video and starts playing with autoplay in Chrome in 1 step!). E.g., for "open YouTube in Chrome and play a song": `action='open_youtube', query='lofi chill beats'`
      * MS Paint & Drawing:
-       - When asked to draw a hut or house: `action='paint_draw', shape='hut'`. This opens a detailed architectural illustration with structure, timber beams, gabled roof shingles, door, windows, and landscape directly in Paint ready for manual editing!
-       - If asked to draw a triangle over a square: `action='paint_draw', shape='triangle_over'` or `shape='triangle', position='over'`.
-       - For simple shapes: `action='paint_draw', shape='square'` (or 'rectangle', 'circle', 'triangle', 'star').
-       - To open an image or SVG in Paint: `action='open_in_paint', path='hut.svg'` or `path='image.png'`. Nemo automatically rasterizes SVGs to high-resolution PNGs and displays them in Paint for manual markup.
+       - To draw shapes or objects in Paint: invoke `action='paint_draw', shape='<any shape>'` (e.g. 'heart', 'star', 'hut', 'house', 'square', 'circle', 'triangle', 'diamond', 'triangle_over' for roof over square).
+       - For custom art, detailed illustrations, or any complex scene (like a car, animal, landscape, or custom drawing): write an SVG file using `write_file(path='drawing.svg', content='<svg ...>')` and invoke `action='open_in_paint', path='drawing.svg'`. Nemo automatically converts it to a high-resolution PNG bitmap and opens it in Paint for manual markup.
      * Sound Recorder: `action='record_audio', duration_seconds=10`
      * Windows Terminal 3-pane layout: `action='terminal_layout', panes=['backend', 'frontend', 'docker']`
      * Alarms / Timers / Stopwatch: `action='set_alarm', time='18:00'`, `action='set_timer', seconds=10`, `action='start_pomodoro', focus_minutes=25`, `action='start_stopwatch'`
