@@ -2816,41 +2816,52 @@ class WindowsDesktopTool(BaseTool):
 
     @staticmethod
     def _ensure_alarm_script() -> Path:
-        """Ensure ~/.nemo/scripts/trigger_alarm.ps1 exists for user-scheduled alarms/timers."""
+        """Ensure ~/.nemo/scripts/trigger_alarm.ps1 exists for user-scheduled hard ringing alarms."""
         scripts_dir = Path.home() / ".nemo" / "scripts"
         scripts_dir.mkdir(parents=True, exist_ok=True)
         script_file = scripts_dir / "trigger_alarm.ps1"
-        if not script_file.exists():
-            content = """param(
-    [string]$Title = "⏰ NEMO Alarm",
+        content = """param(
+    [string]$Title = "⏰ NEMO Hard Alarm",
     [string]$Message = "Alarm time reached!"
 )
 
+# 1. Bring up Windows Clock App
 try {
-    [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-    $template = [Windows.UI.Notifications.ToastTemplateType]::ToastText02
-    $xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($template)
-    $textNodes = $xml.GetElementsByTagName('text')
-    $textNodes.Item(0).AppendChild($xml.CreateTextNode($Title)) | Out-Null
-    $textNodes.Item(1).AppendChild($xml.CreateTextNode($Message)) | Out-Null
-    $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-    $appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe'
-    $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId)
-    $notifier.Show($toast)
-} catch {
-    [void][System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')
-    $n = New-Object System.Windows.Forms.NotifyIcon
-    $n.Icon = [System.Drawing.SystemIcons]::Information
-    $n.BalloonTipTitle = $Title
-    $n.BalloonTipText = $Message
-    $n.Visible = $True
-    $n.ShowBalloonTip(4000)
-    Start-Sleep -Seconds 4
-    $n.Dispose()
+    Start-Process "ms-clock:"
+} catch {}
+
+# 2. Start continuous audio alarm loop in background job
+$soundJob = Start-Job -ScriptBlock {
+    $soundPath = "C:\\Windows\\Media\\Alarm01.wav"
+    if (Test-Path $soundPath) {
+        $player = New-Object System.Media.SoundPlayer $soundPath
+        while ($true) {
+            $player.PlaySync()
+        }
+    } else {
+        while ($true) {
+            [System.Console]::Beep(1200, 400)
+            Start-Sleep -Milliseconds 200
+        }
+    }
 }
-[System.Media.SystemSounds]::Exclamation.Play()
+
+# 3. Display Hard Topmost Dismiss Dialog
+[void][System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms")
+[System.Windows.Forms.MessageBox]::Show(
+    "$Message`n`nClick OK to turn off the alarm.",
+    $Title,
+    [System.Windows.Forms.MessageBoxButtons]::OK,
+    [System.Windows.Forms.MessageBoxIcon]::Exclamation,
+    [System.Windows.Forms.MessageBoxDefaultButton]::Button1,
+    [System.Windows.Forms.MessageBoxOptions]::ServiceNotification
+)
+
+# 4. Stop looping sound when user dismisses
+Stop-Job $soundJob -ErrorAction SilentlyContinue
+Remove-Job $soundJob -ErrorAction SilentlyContinue
 """
-            script_file.write_text(content, encoding="utf-8")
+        script_file.write_text(content, encoding="utf-8")
         return script_file
 
     @staticmethod
@@ -2904,6 +2915,7 @@ try {
                             "notify",
                             "set_alarm",
                             "set_timer",
+                            "start_pomodoro",
                             "list_alarms",
                             "cancel_alarm",
                         ],
@@ -2914,6 +2926,10 @@ try {
                     "message": {"type": "string", "description": "Message for notification or alarm."},
                     "time": {"type": "string", "description": "Time string to trigger alarm, e.g. '18:00', '6:00 PM', '6 PM' (for 'set_alarm')."},
                     "minutes": {"type": "number", "description": "Duration in minutes for countdown timer (for 'set_timer')."},
+                    "focus_minutes": {"type": "number", "description": "Pomodoro focus duration in minutes (default 25) (for 'start_pomodoro')."},
+                    "break_minutes": {"type": "number", "description": "Pomodoro short break duration in minutes (default 5) (for 'start_pomodoro')."},
+                    "long_break_minutes": {"type": "number", "description": "Pomodoro long break duration in minutes (default 15) (for 'start_pomodoro')."},
+                    "cycles": {"type": "integer", "description": "Pomodoro cycles before long break (default 4) (for 'start_pomodoro')."},
                     "task_name": {"type": "string", "description": "Specific task name to cancel or 'all' (for 'cancel_alarm')."},
                 },
                 "required": ["action"],
@@ -3002,7 +3018,7 @@ try {
                     return ToolResult(success=False, error=str(err))
 
                 script_path = self._ensure_alarm_script()
-                title = arguments.get("title") or f"⏰ NEMO Alarm ({label})"
+                title = arguments.get("title") or f"⏰ NEMO Hard Alarm ({label})"
                 msg = arguments.get("message") or f"{label} Alarm - NEMO Assistant"
                 task_name = f"NEMO_Alarm_{time_24.replace(':', '')}"
 
@@ -3018,6 +3034,12 @@ try {
                 if proc.returncode != 0:
                     return ToolResult(success=False, error=f"Failed to schedule alarm: {proc.stderr or proc.stdout}")
 
+                # Launch Windows Clock app so the user sees it visually on screen
+                try:
+                    subprocess.Popen(["cmd.exe", "/c", "start", "ms-clock:"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+
                 return ToolResult(
                     success=True,
                     data={
@@ -3025,50 +3047,74 @@ try {
                         "task_name": task_name,
                         "scheduled_time": label,
                         "time_24h": time_24,
+                        "clock_app": "launched (ms-clock:)",
+                        "hard_alarm": "armed with continuous looping sound until dismissed",
                         "status": "active",
                         "title": title,
                         "message": msg,
-                        "note": "Alarm successfully registered in Windows Task Scheduler (runs without admin privileges).",
+                        "note": "Alarm registered in Windows Task Scheduler and Clock app launched.",
                     },
                 )
 
             elif action == "set_timer":
-                minutes_val = arguments.get("minutes") or arguments.get("duration", 10)
+                minutes_val = arguments.get("minutes") or arguments.get("duration", 25)
                 try:
                     minutes = float(minutes_val)
                 except (ValueError, TypeError):
-                    minutes = 10.0
+                    minutes = 25.0
 
-                now = datetime.datetime.now()
-                target = now + datetime.timedelta(minutes=minutes)
-                time_24 = target.strftime("%H:%M")
-                label = target.strftime("%I:%M %p")
-                script_path = self._ensure_alarm_script()
-                title = arguments.get("title") or f"⏳ Timer Finished ({int(minutes)}m)"
-                msg = arguments.get("message") or f"Your {int(minutes)}-minute timer has finished!"
-                task_name = f"NEMO_Timer_{target.strftime('%H%M%S')}"
+                title = arguments.get("title") or f"Timer ({int(minutes)}m)"
 
-                cmd = [
-                    "schtasks", "/create",
-                    "/tn", task_name,
-                    "/tr", f'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{script_path}" -Title "{title}" -Message "{msg}"',
-                    "/sc", "once",
-                    "/st", time_24,
-                    "/f",
-                ]
-                proc = subprocess.run(cmd, capture_output=True, text=True)
-                if proc.returncode != 0:
-                    return ToolResult(success=False, error=f"Failed to set timer: {proc.stderr or proc.stdout}")
+                # Launch floating always-on-top desktop widget
+                from nemo.ui.timer_widget import launch_timer_widget_process
+                widget_proc = launch_timer_widget_process(
+                    mode="timer",
+                    minutes=minutes,
+                    title=title,
+                )
 
                 return ToolResult(
                     success=True,
                     data={
                         "action": "set_timer",
-                        "task_name": task_name,
                         "duration_minutes": minutes,
-                        "trigger_time": label,
-                        "time_24h": time_24,
-                        "status": "active",
+                        "title": title,
+                        "widget_status": "active (always-on-top desktop widget)",
+                        "widget_pid": widget_proc.pid,
+                        "note": "Desktop floating timer widget launched on screen with hard alarm ringing on completion.",
+                    },
+                )
+
+            elif action == "start_pomodoro":
+                focus = float(arguments.get("focus_minutes") or arguments.get("focus") or 25.0)
+                break_min = float(arguments.get("break_minutes") or arguments.get("break") or 5.0)
+                long_break = float(arguments.get("long_break_minutes") or arguments.get("long_break") or 15.0)
+                cycles = int(arguments.get("cycles") or 4)
+                title = arguments.get("title") or "Pomodoro Focus"
+
+                # Launch floating always-on-top Pomodoro widget
+                from nemo.ui.timer_widget import launch_timer_widget_process
+                widget_proc = launch_timer_widget_process(
+                    mode="pomodoro",
+                    focus=focus,
+                    break_min=break_min,
+                    long_break=long_break,
+                    cycles=cycles,
+                    title=title,
+                )
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "start_pomodoro",
+                        "focus_minutes": focus,
+                        "break_minutes": break_min,
+                        "long_break_minutes": long_break,
+                        "cycles": cycles,
+                        "title": title,
+                        "widget_status": "active (always-on-top desktop widget)",
+                        "widget_pid": widget_proc.pid,
+                        "note": "Desktop Pomodoro widget launched on screen with custom cycles and audio alarm ringing.",
                     },
                 )
 

@@ -53,7 +53,7 @@ Core Principles & Rules:
    - For testing REST/HTTP endpoints, webhooks, or API latency: invoke `api_tester`.
    - For live hardware metrics (CPU, RAM, disk), listening ports, or process management: invoke `system_inspector`.
    - For Git operations (branches, staged diffs, semantic commits, push readiness): invoke `git_operations`.
-   - For Windows clipboard copy/paste, toast notifications, setting alarms, or countdown timers: invoke `desktop_integration` (action: 'notify', 'set_alarm', 'set_timer', 'list_alarms', 'cancel_alarm'). E.g., to set a 6 PM alarm, invoke `desktop_integration` with `action='set_alarm', time='18:00'`. To set a 25-minute timer, invoke with `action='set_timer', minutes=25`.
+   - For Windows clipboard copy/paste, toast notifications, hard ringing alarms, or floating desktop widgets (timers & Pomodoro): invoke `desktop_integration` (action: 'notify', 'set_alarm', 'set_timer', 'start_pomodoro', 'list_alarms', 'cancel_alarm'). E.g., for a 6 PM alarm, invoke `desktop_integration` with `action='set_alarm', time='18:00'`. For a desktop floating timer, invoke with `action='set_timer', minutes=25`. For a custom Pomodoro, invoke with `action='start_pomodoro', focus_minutes=25, break_minutes=5`.
    - CRITICAL WORKSPACE INTEGRITY: NEVER write temporary scripts (.ps1, .bat) to the workspace for setting alarms, timers, or desktop actions. ALWAYS use `desktop_integration`.
    - For web search, technical documentation scraping, package info, or online research: invoke `web_researcher`.
    - Never traverse folders recursively with `list_directory` when search or summary tools exist.

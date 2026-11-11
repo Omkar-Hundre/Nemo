@@ -587,6 +587,38 @@ async def test_desktop_integration_set_and_cancel_alarm():
     assert task_name in res_cancel.data["deleted_tasks"]
 
 
+@pytest.mark.asyncio
+async def test_desktop_integration_timer_and_pomodoro_widgets():
+    """Verify launching floating timer and pomodoro widgets."""
+    tool = WindowsDesktopTool()
+
+    # 1. Test set_timer
+    res_timer = await tool.execute(
+        {"action": "set_timer", "minutes": 15, "title": "Test Focus Timer"},
+        {},
+    )
+    assert res_timer.success is True
+    assert res_timer.data["duration_minutes"] == 15
+    assert "active" in res_timer.data["widget_status"]
+
+    # 2. Test start_pomodoro with custom settings
+    res_pomo = await tool.execute(
+        {
+            "action": "start_pomodoro",
+            "focus_minutes": 50,
+            "break_minutes": 10,
+            "long_break_minutes": 20,
+            "cycles": 3,
+            "title": "Custom Deep Work",
+        },
+        {},
+    )
+    assert res_pomo.success is True
+    assert res_pomo.data["focus_minutes"] == 50
+    assert res_pomo.data["break_minutes"] == 10
+    assert res_pomo.data["cycles"] == 3
+
+
 def test_extract_json_block_multi_concatenated_objects():
     """Verify extract_json_block extracts first valid JSON block when LLM concatenates multiple objects."""
     from nemo.agent.orchestrator import extract_json_block
