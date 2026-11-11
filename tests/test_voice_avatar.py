@@ -151,28 +151,45 @@ class TestPaintDrawTool:
              patch("win32api.mouse_event"):
             res_hut = await tool.execute({"action": "paint_draw", "shape": "hut", "size": 200}, {})
             assert res_hut.success is True
-            assert "Hut" in res_hut.data["note"]
+            assert "hut" in res_hut.data["note"].lower()
 
             res_tri = await tool.execute({"action": "paint_draw", "shape": "triangle_over", "size": 200}, {})
             assert res_tri.success is True
             assert res_tri.data["shape"] == "triangle_over"
 
     @pytest.mark.asyncio
-    async def test_paint_rejects_svg(self):
+    async def test_paint_svg_rasterize_and_open(self, tmp_path):
         tool = WindowsDesktopTool()
-        res = await tool.execute({"action": "open_in_paint", "path": "test_hut.svg"}, {})
-        assert res.success is False
-        assert "cannot open .svg" in res.error
-        assert "paint_draw" in res.error
+        svg_file = tmp_path / "art.svg"
+        svg_file.write_text("<svg><rect width='10' height='10'/></svg>")
+        with patch.object(WindowsDesktopTool, "_rasterize_svg_to_png") as mock_rast, \
+             patch("subprocess.Popen") as mock_popen:
+            mock_proc = MagicMock()
+            mock_proc.pid = 4321
+            mock_popen.return_value = mock_proc
+            mock_rast.return_value = tmp_path / "art.png"
+
+            res = await tool.execute({"action": "open_in_paint", "path": str(svg_file)}, {"working_directory": tmp_path})
+            assert res.success is True
+            assert mock_rast.called
+            assert "art.png" in res.data["image_path"]
 
     @pytest.mark.asyncio
-    async def test_open_youtube(self):
+    async def test_open_youtube_autoplay(self):
         tool = WindowsDesktopTool()
-        with patch("subprocess.Popen") as mock_popen, patch("webbrowser.open") as mock_wb:
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("webbrowser.open") as mock_wb, \
+             patch("urllib.request.urlopen") as mock_urlopen:
             mock_proc = MagicMock()
             mock_proc.pid = 1234
             mock_popen.return_value = mock_proc
 
-            res = await tool.execute({"action": "open_youtube", "query": "lofi hip hop"}, {})
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = b'{"videoId":"dQw4w9WgXcQ"}'
+            mock_resp.__enter__.return_value = mock_resp
+            mock_urlopen.return_value = mock_resp
+
+            res = await tool.execute({"action": "open_youtube", "query": "rickroll"}, {})
             assert res.success is True
-            assert "results?search_query=lofi" in res.data["url"]
+            assert "watch?v=dQw4w9WgXcQ&autoplay=1" in res.data["url"]
+            assert res.data["status"] == "playing"

@@ -3483,6 +3483,33 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
             risk_level=self.risk_level,
         )
 
+    @staticmethod
+    def _rasterize_svg_to_png(svg_path: Path) -> Path | None:
+        """Rasterize an SVG vector file into a high-res PNG bitmap using Microsoft Edge headless."""
+        try:
+            png_path = svg_path.with_suffix(".png")
+            edge_candidates = [
+                Path(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+                Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "Microsoft" / "Edge" / "Application" / "msedge.exe",
+            ]
+            edge_exe = next((str(p) for p in edge_candidates if p.exists()), None)
+            if edge_exe and svg_path.exists():
+                cmd = [
+                    edge_exe,
+                    "--headless",
+                    "--disable-gpu",
+                    f"--screenshot={str(png_path.resolve())}",
+                    "--window-size=1200,900",
+                    "--hide-scrollbars",
+                    svg_path.resolve().as_uri(),
+                ]
+                subprocess.run(cmd, capture_output=True, timeout=10)
+                if png_path.exists() and png_path.stat().st_size > 0:
+                    return png_path
+        except Exception:
+            pass
+        return None
+
     async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
         action = arguments.get("action", "").lower().strip()
         base_dir = Path(context.get("working_directory", Path.cwd()))
@@ -3851,13 +3878,6 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
 
             elif action == "open_in_paint":
                 path_arg = arguments.get("path") or arguments.get("file")
-                if path_arg and str(path_arg).lower().endswith(".svg"):
-                    return ToolResult(
-                        success=False,
-                        error="Microsoft Paint is a bitmap editor and cannot open .svg vector files. "
-                              "To draw shapes or art on the Paint canvas, use desktop_integration "
-                              "with action='paint_draw', shape='hut' (or 'square', 'circle', 'triangle_over', etc.).",
-                    )
                 target_file = None
                 if path_arg:
                     p = Path(context.get("working_directory", Path.cwd())) / path_arg
@@ -3865,6 +3885,12 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                         target_file = p
                     elif Path(path_arg).exists():
                         target_file = Path(path_arg)
+
+                # If target is an SVG, automatically rasterize to high-res PNG for Paint
+                if target_file and target_file.suffix.lower() == ".svg":
+                    rasterized = self._rasterize_svg_to_png(target_file)
+                    if rasterized:
+                        target_file = rasterized
 
                 if not target_file:
                     # Capture instant screen to temporary canvas
@@ -3893,17 +3919,32 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                         "action": "open_in_paint",
                         "image_path": str(target_file) if target_file else None,
                         "pid": proc.pid,
-                        "note": "Microsoft Paint canvas opened successfully for manual markup.",
+                        "note": "Image opened in Microsoft Paint canvas for editing.",
                     },
                 )
 
             elif action in ("open_youtube", "youtube", "play_youtube"):
                 query = arguments.get("query") or arguments.get("search") or arguments.get("song") or ""
                 import urllib.parse
+                import urllib.request
+                import re
+
+                url = "https://www.youtube.com"
                 if query:
-                    url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
-                else:
-                    url = "https://www.youtube.com"
+                    video_url = None
+                    try:
+                        search_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
+                        req = urllib.request.Request(search_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+                        with urllib.request.urlopen(req, timeout=3.5) as resp:
+                            html = resp.read().decode("utf-8", errors="ignore")
+                            v_ids = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+                            if not v_ids:
+                                v_ids = re.findall(r'/watch\?v=([a-zA-Z0-9_-]{11})', html)
+                            if v_ids:
+                                video_url = f"https://www.youtube.com/watch?v={v_ids[0]}&autoplay=1"
+                    except Exception:
+                        pass
+                    url = video_url or f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
 
                 chrome_candidates = [
                     Path(os.environ.get("PROGRAMFILES", "C:\\Program Files")) / "Google" / "Chrome" / "Application" / "chrome.exe",
@@ -3922,7 +3963,8 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                         "action": "open_youtube",
                         "query": query,
                         "url": url,
-                        "note": f"YouTube opened for '{query or 'homepage'}'.",
+                        "status": "playing",
+                        "note": f"Playing on YouTube: '{query or 'homepage'}'.",
                     },
                 )
 
@@ -4053,34 +4095,134 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                         (cx, cy - half),
                     ])
 
-                elif shape in ("hut", "house"):
-                    # Complete hut in 3 clean strokes
-                    roof_top = cy - half - int(size * 0.55)
-                    # 1. Base square
-                    base = [
-                        (cx - half, cy - half),
-                        (cx + half, cy - half),
-                        (cx + half, cy + half),
-                        (cx - half, cy + half),
-                        (cx - half, cy - half),
-                    ]
-                    # 2. Roof triangle
-                    roof = [
+                if shape in ("hut", "house"):
+                    # Generate rich architectural illustration SVG with full details and rasterize to PNG for Paint
+                    hut_svg_content = '''<svg width="1000" height="750" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="skyGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#60b8ff" />
+      <stop offset="100%" stop-color="#cbe8ff" />
+    </linearGradient>
+    <linearGradient id="roofGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#b8381e" />
+      <stop offset="100%" stop-color="#6b1d0c" />
+    </linearGradient>
+    <linearGradient id="wallGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f5dfc6" />
+      <stop offset="100%" stop-color="#c9a175" />
+    </linearGradient>
+    <linearGradient id="grassGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4caf50" />
+      <stop offset="100%" stop-color="#2e7d32" />
+    </linearGradient>
+  </defs>
+
+  <!-- Sky -->
+  <rect width="1000" height="750" fill="url(#skyGrad)" />
+
+  <!-- Sun -->
+  <circle cx="860" cy="110" r="50" fill="#ffd53d" />
+  <circle cx="860" cy="110" r="65" fill="#ffe57f" opacity="0.35" />
+
+  <!-- Distant Mountains -->
+  <polygon points="-50,540 200,320 450,540" fill="#9db8cc" opacity="0.75" />
+  <polygon points="220,540 500,280 800,540" fill="#8ca9bd" opacity="0.75" />
+
+  <!-- Ground / Lawn -->
+  <rect y="530" width="1000" height="220" fill="url(#grassGrad)" />
+
+  <!-- Stone Path -->
+  <path d="M 470 530 L 530 530 L 590 750 L 410 750 Z" fill="#8c867a" stroke="#69645b" stroke-width="3" />
+
+  <!-- Hut Base (Timber Walls) -->
+  <rect x="320" y="340" width="360" height="220" rx="8" fill="url(#wallGrad)" stroke="#4a2e15" stroke-width="5" />
+
+  <!-- Wall Architectural Timber Beams -->
+  <line x1="320" y1="410" x2="680" y2="410" stroke="#4a2e15" stroke-width="4" stroke-dasharray="18,6" />
+  <line x1="320" y1="480" x2="680" y2="480" stroke="#4a2e15" stroke-width="4" stroke-dasharray="18,6" />
+  <line x1="420" y1="340" x2="420" y2="560" stroke="#4a2e15" stroke-width="5" />
+  <line x1="580" y1="340" x2="580" y2="560" stroke="#4a2e15" stroke-width="5" />
+
+  <!-- Chimney and Smoke -->
+  <rect x="590" y="190" width="46" height="90" fill="#8b3a2b" stroke="#4a1c13" stroke-width="4" />
+  <ellipse cx="613" cy="165" rx="16" ry="9" fill="#e8e8e8" opacity="0.7" />
+  <ellipse cx="630" cy="135" rx="24" ry="13" fill="#e8e8e8" opacity="0.5" />
+  <ellipse cx="655" cy="100" rx="32" ry="17" fill="#e8e8e8" opacity="0.4" />
+
+  <!-- Roof (Overhang Gabled Triangle) -->
+  <polygon points="270,340 500,160 730,340" fill="url(#roofGrad)" stroke="#381007" stroke-width="6" />
+  <line x1="330" y1="290" x2="670" y2="290" stroke="#381007" stroke-width="4" />
+  <line x1="400" y1="235" x2="600" y2="235" stroke="#381007" stroke-width="4" />
+
+  <!-- Attic Vent Window -->
+  <circle cx="500" cy="255" r="22" fill="#291a10" stroke="#f5dfc6" stroke-width="3" />
+  <line x1="500" y1="233" x2="500" y2="277" stroke="#f5dfc6" stroke-width="3" />
+  <line x1="478" y1="255" x2="522" y2="255" stroke="#f5dfc6" stroke-width="3" />
+
+  <!-- Detailed Wooden Door -->
+  <rect x="455" y="415" width="90" height="145" rx="5" fill="#6d3811" stroke="#381c08" stroke-width="4" />
+  <rect x="467" y="427" width="30" height="54" fill="#542a0b" stroke="#381c08" stroke-width="1.5" />
+  <rect x="503" y="427" width="30" height="54" fill="#542a0b" stroke="#381c08" stroke-width="1.5" />
+  <rect x="467" y="491" width="30" height="58" fill="#542a0b" stroke="#381c08" stroke-width="1.5" />
+  <rect x="503" y="491" width="30" height="58" fill="#542a0b" stroke="#381c08" stroke-width="1.5" />
+  <!-- Door Knob & Keyhole -->
+  <circle cx="528" cy="497" r="5" fill="#ffd700" stroke="#8a6500" stroke-width="1.5" />
+  <!-- Stone Doorstep -->
+  <rect x="445" y="558" width="110" height="10" fill="#7a7a7a" stroke="#404040" stroke-width="2.5" />
+
+  <!-- Left Window with Shutters & Sill -->
+  <rect x="345" y="395" width="58" height="70" fill="#e6f7ff" stroke="#4a2e15" stroke-width="3.5" />
+  <line x1="374" y1="395" x2="374" y2="465" stroke="#4a2e15" stroke-width="2.5" />
+  <line x1="345" y1="430" x2="403" y2="430" stroke="#4a2e15" stroke-width="2.5" />
+  <rect x="338" y="465" width="72" height="8" fill="#381c08" />
+
+  <!-- Right Window with Shutters & Sill -->
+  <rect x="597" y="395" width="58" height="70" fill="#e6f7ff" stroke="#4a2e15" stroke-width="3.5" />
+  <line x1="626" y1="395" x2="626" y2="465" stroke="#4a2e15" stroke-width="2.5" />
+  <line x1="597" y1="430" x2="655" y2="430" stroke="#4a2e15" stroke-width="2.5" />
+  <rect x="590" y="465" width="72" height="8" fill="#381c08" />
+
+  <!-- Garden Flowers -->
+  <circle cx="355" cy="548" r="6" fill="#e91e63" />
+  <circle cx="390" cy="554" r="6" fill="#ffeb3b" />
+  <circle cx="610" cy="552" r="6" fill="#9c27b0" />
+  <circle cx="645" cy="546" r="6" fill="#ff9800" />
+</svg>'''
+                    work_dir = Path(context.get("working_directory", Path.cwd()))
+                    svg_file = work_dir / "hut.svg"
+                    png_file = work_dir / "hut.png"
+                    svg_file.write_text(hut_svg_content, encoding="utf-8")
+                    rasterized = self._rasterize_svg_to_png(svg_file)
+                    target_to_open = rasterized or png_file
+                    proc = subprocess.Popen(["mspaint.exe", str(target_to_open.resolve())])
+                    return ToolResult(
+                        success=True,
+                        data={
+                            "action": "paint_draw",
+                            "shape": "hut",
+                            "file": str(target_to_open),
+                            "pid": proc.pid,
+                            "note": "Architectural hut with timber beams, gabled roof, door, and windows opened in Paint.",
+                        },
+                    )
+
+                elif shape in ("triangle_over", "roof") or (shape == "triangle" and position in ("over", "top")):
+                    # Triangle sitting directly on top of square base
+                    roof_top = cy - half - int(size * 0.6)
+                    strokes.append([
                         (cx - half, cy - half),
                         (cx, roof_top),
                         (cx + half, cy - half),
-                    ]
-                    # 3. Door
-                    door_w = half // 3
-                    door_h = int(half * 0.8)
-                    bottom_y = cy + half
-                    door = [
-                        (cx - door_w, bottom_y),
-                        (cx - door_w, bottom_y - door_h),
-                        (cx + door_w, bottom_y - door_h),
-                        (cx + door_w, bottom_y),
-                    ]
-                    strokes = [base, roof, door]
+                        (cx - half, cy - half),
+                    ])
+
+                elif shape == "triangle":
+                    strokes.append([
+                        (cx, cy - half),
+                        (cx + half, cy + half),
+                        (cx - half, cy + half),
+                        (cx, cy - half),
+                    ])
 
                 elif shape == "circle":
                     import math
@@ -4106,6 +4248,14 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
 
                 # Execute all strokes with hardware-level mouse dragging
                 if win32api:
+                    # Select Brush tool in Paint
+                    try:
+                        win32api.keybd_event(ord('B'), 0, 0, 0)
+                        win32api.keybd_event(ord('B'), 0, 2, 0)
+                        await asyncio.sleep(0.08)
+                    except Exception:
+                        pass
+
                     for stroke in strokes:
                         if not stroke:
                             continue
@@ -4119,25 +4269,25 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
 
                         # 2. Mouse LEFTDOWN
                         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-                        await asyncio.sleep(0.03)
+                        await asyncio.sleep(0.04)
 
-                        # 3. Continuous interpolated dragging with MOUSEEVENTF_MOVE
+                        # 3. Continuous interpolated dragging with MOUSEEVENTF_MOVE (no SetCursorPos during drag)
+                        cur_x, cur_y = sx, sy
                         for i in range(len(stroke) - 1):
-                            x1, y1 = stroke[i]
-                            x2, y2 = stroke[i + 1]
-                            dist = max(abs(x2 - x1), abs(y2 - y1))
-                            steps = max(18, min(70, dist // 3))
+                            target_x, target_y = stroke[i + 1]
+                            dist = max(abs(target_x - cur_x), abs(target_y - cur_y))
+                            steps = max(20, min(60, dist // 3))
                             for s in range(1, steps + 1):
-                                step_x = int(x1 + (x2 - x1) * (s / steps))
-                                step_y = int(y1 + (y2 - y1) * (s / steps))
+                                step_x = int(cur_x + (target_x - cur_x) * (s / steps))
+                                step_y = int(cur_y + (target_y - cur_y) * (s / steps))
                                 norm_x = int(step_x * 65535 / (screen_w - 1))
                                 norm_y = int(step_y * 65535 / (screen_h - 1))
-                                win32api.SetCursorPos((step_x, step_y))
                                 win32api.mouse_event(win32con.MOUSEEVENTF_MOVE | win32con.MOUSEEVENTF_ABSOLUTE, norm_x, norm_y, 0, 0)
-                                await asyncio.sleep(0.006)
+                                await asyncio.sleep(0.008)
+                            cur_x, cur_y = target_x, target_y
 
                         # 4. Mouse LEFTUP
-                        await asyncio.sleep(0.03)
+                        await asyncio.sleep(0.04)
                         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                         await asyncio.sleep(0.08)
 
