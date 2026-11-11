@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NEMO — Autonomous Windows Developer Operating Runtime & Voice Assistant</title>
+  <meta name="description" content="Voice-first, autonomous Windows developer operating assistant. Automates coding, desktop GUI tasks, database queries, and deployment directly on Windows 11.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #07090e;
+      --bg-surface: #0e131d;
+      --bg-card: #131b29;
+      --bg-card-hover: #172234;
+      --border: rgba(255, 255, 255, 0.08);
+      --border-accent: rgba(0, 240, 255, 0.3);
+      --text-main: #f0f4f8;
+      --text-muted: #8b9bb4;
+      --cyan: #00f0ff;
+      --cyan-glow: rgba(0, 240, 255, 0.25);
+      --orange: #ff6b35;
+      --orange-glow: rgba(255, 107, 53, 0.3);
+      --green: #10b981;
+      --purple: #8b5cf6;
+      --font-sans: 'Manrope', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      line-height: 1.6;
+      overflow-x: hidden;
+      background-image: 
+        radial-gradient(circle at 15% 15%, rgba(0, 240, 255, 0.04) 0%, transparent 45%),
+        radial-gradient(circle at 85% 65%, rgba(255, 107, 53, 0.04) 0%, transparent 45%);
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    /* Container */
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* Navigation */
+    header {
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      backdrop-filter: blur(16px);
+      background: rgba(7, 9, 14, 0.85);
+      z-index: 100;
+    }
+    .nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      height: 72px;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 800;
+      font-size: 1.3rem;
+      letter-spacing: -0.5px;
+    }
+    .fish-icon {
+      width: 32px;
+      height: 32px;
+      animation: floatFish 3s ease-in-out infinite alternate;
+    }
+    @keyframes floatFish {
+      0% { transform: translateY(0) rotate(0deg); }
+      100% { transform: translateY(-4px) rotate(3deg); }
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 32px;
+    }
+    .nav-link {
+      font-size: 0.95rem;
+      color: var(--text-muted);
+      transition: color 0.2s;
+    }
+    .nav-link:hover {
+      color: var(--text-main);
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.92rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: 1px solid transparent;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #ff6b35, #ff8c42);
+      color: #fff;
+      box-shadow: 0 4px 20px var(--orange-glow);
+    }
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 24px rgba(255, 107, 53, 0.45);
+    }
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--border);
+      color: var(--text-main);
+    }
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    /* Hero Section */
+    .hero {
+      padding: 100px 0 60px;
+      text-align: center;
+      position: relative;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      background: rgba(0, 240, 255, 0.08);
+      border: 1px solid var(--border-accent);
+      color: var(--cyan);
+      font-size: 0.82rem;
+      font-family: var(--font-mono);
+      font-weight: 500;
+      margin-bottom: 24px;
+    }
+    .badge-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+    .hero h1 {
+      font-size: 3.8rem;
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -1.5px;
+      max-width: 900px;
+      margin: 0 auto 24px;
+    }
+    .gradient-text {
+      background: linear-gradient(135deg, #ffffff 40%, var(--cyan) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .hero p {
+      font-size: 1.25rem;
+      color: var(--text-muted);
+      max-width: 680px;
+      margin: 0 auto 40px;
+      font-weight: 400;
+    }
+    .hero-actions {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      margin-bottom: 48px;
+      flex-wrap: wrap;
+    }
+
+    /* One-Click Install Snippet */
+    .install-box {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 20px;
+      max-width: 640px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.4);
+    }
+    .install-code {
+      font-family: var(--font-mono);
+      font-size: 0.88rem;
+      color: #94a3b8;
+      overflow-x: auto;
+      white-space: nowrap;
+      text-align: left;
+    }
+    .install-code span {
+      color: var(--cyan);
+    }
+    .copy-btn {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      font-weight: 600;
+      transition: all 0.2s;
+      white-space: nowrap;
+    }
+    .copy-btn:hover {
+      background: rgba(255, 255, 255, 0.16);
+      border-color: var(--cyan);
+      color: var(--cyan);
+    }
+
+    /* Interactive Simulation Console */
+    .demo-wrapper {
+      margin-top: 64px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05);
+      text-align: left;
+    }
+    .demo-header {
+      background: #090c12;
+      border-bottom: 1px solid var(--border);
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .window-dots {
+      display: flex;
+      gap: 8px;
+    }
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+    .dot-red { background: #ff5f56; }
+    .dot-yellow { background: #ffbd2e; }
+    .dot-green { background: #27c93f; }
+    .demo-title {
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    .demo-pill-bar {
+      display: flex;
+      gap: 8px;
+      padding: 12px 20px;
+      background: rgba(0, 0, 0, 0.2);
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+    }
+    .cmd-pill {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 14px;
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+      font-family: var(--font-mono);
+    }
+    .cmd-pill:hover, .cmd-pill.active {
+      border-color: var(--cyan);
+      color: #fff;
+      background: rgba(0, 240, 255, 0.1);
+      box-shadow: 0 0 12px rgba(0, 240, 255, 0.2);
+    }
+
+    .demo-body {
+      padding: 24px;
+      font-family: var(--font-mono);
+      font-size: 0.9rem;
+      min-height: 280px;
+      line-height: 1.7;
+      background: #06080d;
+    }
+    .terminal-line {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .prompt-prefix {
+      color: var(--cyan);
+      font-weight: 700;
+    }
+    .exec-step {
+      color: #94a3b8;
+      padding-left: 20px;
+      border-left: 2px solid rgba(255, 255, 255, 0.1);
+      margin: 10px 0 10px 10px;
+    }
+    .step-ok {
+      color: var(--green);
+      font-weight: 700;
+      margin-right: 6px;
+    }
+    .outcome-box {
+      margin-top: 16px;
+      background: rgba(16, 185, 129, 0.08);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      border-radius: 8px;
+      padding: 14px 18px;
+      color: #e2e8f0;
+    }
+
+    /* Bento Features Grid */
+    .section-title {
+      text-align: center;
+      margin: 120px 0 60px;
+    }
+    .section-title h2 {
+      font-size: 2.5rem;
+      font-weight: 800;
+      letter-spacing: -1px;
+      margin-bottom: 16px;
+    }
+    .section-title p {
+      color: var(--text-muted);
+      font-size: 1.1rem;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    .bento-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+    }
+    .bento-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px;
+      position: relative;
+      transition: all 0.3s;
+      overflow: hidden;
+    }
+    .bento-card:hover {
+      border-color: rgba(0, 240, 255, 0.3);
+      transform: translateY(-4px);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+    }
+    .bento-card.span-2 {
+      grid-column: span 2;
+    }
+    .card-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.04);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      margin-bottom: 20px;
+      border: 1px solid var(--border);
+    }
+    .bento-card h3 {
+      font-size: 1.3rem;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+    .bento-card p {
+      color: var(--text-muted);
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+    .card-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 20px;
+    }
+    .tag {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-family: var(--font-mono);
+      color: #94a3b8;
+    }
+
+    /* Architecture Section */
+    .arch-box {
+      margin-top: 60px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 40px;
+      text-align: center;
+    }
+    .arch-flow {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 20px;
+      flex-wrap: wrap;
+      margin-top: 32px;
+    }
+    .flow-node {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      padding: 16px 24px;
+      border-radius: 12px;
+      font-weight: 600;
+      font-size: 0.92rem;
+      min-width: 180px;
+    }
+    .flow-node.highlight {
+      border-color: var(--cyan);
+      box-shadow: 0 0 20px var(--cyan-glow);
+    }
+    .flow-arrow {
+      color: var(--cyan);
+      font-weight: 700;
+      font-size: 1.4rem;
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 60px 0 40px;
+      margin-top: 120px;
+      color: var(--text-muted);
+      font-size: 0.9rem;
+    }
+    .footer-content {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 20px;
+    }
+
+    @media (max-width: 900px) {
+      .hero h1 { font-size: 2.6rem; }
+      .bento-grid { grid-template-columns: 1fr; }
+      .bento-card.span-2 { grid-column: span 1; }
+      .arch-flow { flex-direction: column; }
+      .flow-arrow { transform: rotate(90deg); }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header>
+    <div class="container nav">
+      <div class="logo">
+        <svg class="fish-icon" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <ellipse cx="32" cy="32" rx="22" ry="14" fill="#FF6B35" />
+          <path d="M50 32 L62 20 L62 44 Z" fill="#FF6B35" />
+          <path d="M26 18 Q28 32 26 46" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" />
+          <path d="M38 18 Q40 32 38 46" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" />
+          <circle cx="18" cy="28" r="3" fill="#FFFFFF" />
+          <circle cx="17" cy="28" r="1.5" fill="#000000" />
+        </svg>
+        <span>NEMO</span>
+      </div>
+      <nav class="nav-links">
+        <a href="#features" class="nav-link">Features</a>
+        <a href="#architecture" class="nav-link">Architecture</a>
+        <a href="#demo" class="nav-link">Live Simulator</a>
+        <a href="https://github.com/Omkar-Hundre/Nemo" target="_blank" class="nav-link">GitHub</a>
+        <a href="https://github.com/Omkar-Hundre/Nemo/releases" target="_blank" class="btn btn-secondary">Download Installer</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Hero Section -->
+  <section class="hero container">
+    <div class="badge">
+      <span class="badge-dot"></span>
+      <span>NEMO 2.0 DEV RUNTIME ACTIVE</span>
+    </div>
+    <h1>The Voice-First Autonomous <span class="gradient-text">Windows Developer Runtime</span></h1>
+    <p>Automate coding, desktop GUI tasks, database queries, hardware controls, and deployments natively on Windows 11 with zero-hallucination verification gates.</p>
+    
+    <div class="hero-actions">
+      <a href="https://github.com/Omkar-Hundre/Nemo" target="_blank" class="btn btn-primary">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        Star on GitHub
+      </a>
+      <a href="#demo" class="btn btn-secondary">Explore Commands</a>
+    </div>
+
+    <!-- 1-Click Install -->
+    <div class="install-box">
+      <div class="install-code">
+        <span>PS D:\&gt;</span> irm https://raw.githubusercontent.com/Omkar-Hundre/Nemo/main/scripts/install.ps1 | iex
+      </div>
+      <button class="copy-btn" onclick="copyInstall()">Copy Install</button>
+    </div>
+
+    <!-- Interactive Simulator -->
+    <div class="demo-wrapper" id="demo">
+      <div class="demo-header">
+        <div class="window-dots">
+          <div class="dot dot-red"></div>
+          <div class="dot dot-yellow"></div>
+          <div class="dot dot-green"></div>
+        </div>
+        <div class="demo-title">NEMO OS Interactive Shell — Autonomous Execution Trace</div>
+        <div style="font-size: 0.8rem; color: var(--green);">● ENGINE: READY</div>
+      </div>
+
+      <div class="demo-pill-bar">
+        <button class="cmd-pill active" onclick="runDemo(0)">📸 Vision Snip & Fix</button>
+        <button class="cmd-pill" onclick="runDemo(1)">🎨 Jarvis Canvas Box</button>
+        <button class="cmd-pill" onclick="runDemo(2)">🖥️ 3-Pane Windows Terminal</button>
+        <button class="cmd-pill" onclick="runDemo(3)">🎵 Direct YouTube Autoplay</button>
+        <button class="cmd-pill" onclick="runDemo(4)">🎙️ Hands-Free Mic Recording</button>
+      </div>
+
+      <div class="demo-body" id="demoOutput">
+        <!-- Rendered by JS -->
+      </div>
+    </div>
+  </section>
+
+  <!-- Features Bento Grid -->
+  <section class="container" id="features">
+    <div class="section-title">
+      <h2>Engineered for Deep Windows Autonomy</h2>
+      <p>50 native capabilities spanning local hardware control, developer ergonomics, AI vision, and ground-truth verification.</p>
+    </div>
+
+    <div class="bento-grid">
+      <!-- Card 1 -->
+      <div class="bento-card span-2">
+        <div class="card-icon">🎙️</div>
+        <h3>Voice-First Local Whisper Engine & Taskbar Pill</h3>
+        <p>Runs local INT8 quantized Whisper for sub-200ms voice transcription without transmitting audio outside your system. Features non-blocking tiered task queues, wake-word detection ("Nemo"), and a sleek always-on-top interactive status pill.</p>
+        <div class="card-tags">
+          <span class="tag">Local Whisper INT8</span>
+          <span class="tag">Wake-Word 'Nemo'</span>
+          <span class="tag">Idempotent Queue</span>
+          <span class="tag">Auto-Boot Daemon</span>
+        </div>
+      </div>
+
+      <!-- Card 2 -->
+      <div class="bento-card">
+        <div class="card-icon">✂️</div>
+        <h3>Snip & Sketch Vision AI</h3>
+        <p>Autonomous region cropping with Nemotron 3.5 VL element detection, automatic clipboard synchronization, and instant Web fix synthesis for on-screen errors.</p>
+        <div class="card-tags">
+          <span class="tag">WinRT Screen Capture</span>
+          <span class="tag">Nemotron VL</span>
+          <span class="tag">CF_DIB Clipboard</span>
+        </div>
+      </div>
+
+      <!-- Card 3 -->
+      <div class="bento-card">
+        <div class="card-icon">📐</div>
+        <h3>Jarvis Canvas & Visual Annotator</h3>
+        <p>Mathematical PIL and GDI+ markup engine that renders pixel-perfect bounding boxes, semi-transparent tints, directional pointing arrows, and text badges on any screenshot.</p>
+        <div class="card-tags">
+          <span class="tag">Rounded Rectangles</span>
+          <span class="tag">Directional Arrows</span>
+          <span class="tag">Highlight Overlays</span>
+        </div>
+      </div>
+
+      <!-- Card 4 -->
+      <div class="bento-card span-2">
+        <div class="card-icon">⚡</div>
+        <h3>The 5 Core Developer Beast Tools</h3>
+        <p>Execute Git operations, SQLite schema introspection, REST API probes with millisecond latency metrics, Win32 hardware inspection (RAM, ports, runaway processes), and native desktop notifications directly from natural voice.</p>
+        <div class="card-tags">
+          <span class="tag">git_operations</span>
+          <span class="tag">database_inspector</span>
+          <span class="tag">api_tester</span>
+          <span class="tag">system_inspector</span>
+          <span class="tag">desktop_integration</span>
+        </div>
+      </div>
+
+      <!-- Card 5 -->
+      <div class="bento-card">
+        <div class="card-icon">🛡️</div>
+        <h3>Ground-Truth Verification Gates</h3>
+        <p>Never hallucinates completion. Every file edit, migration, or process is independently tested against AST linters and test suites before returning a verified outcome.</p>
+        <div class="card-tags">
+          <span class="tag">Automated Tests</span>
+          <span class="tag">Diff Validation</span>
+          <span class="tag">Rollback Safety</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Architecture Flow -->
+  <section class="container" id="architecture">
+    <div class="section-title">
+      <h2>System Architecture</h2>
+      <p>How NEMO connects local audio signals to autonomous Windows execution planes.</p>
+    </div>
+
+    <div class="arch-box">
+      <div class="arch-flow">
+        <div class="flow-node">
+          <strong>WASAPI Microphone</strong>
+          <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">44.1kHz Ring Buffer</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node highlight">
+          <strong>Local Whisper INT8</strong>
+          <div style="font-size: 0.8rem; color: var(--cyan); margin-top: 4px;">Wake Word & Deduplication</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node">
+          <strong>Agent Orchestrator</strong>
+          <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">NVIDIA Nemotron 120B</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node highlight">
+          <strong>Windows OS Execution Plane</strong>
+          <div style="font-size: 0.8rem; color: var(--cyan); margin-top: 4px;">Win32 / UIA / DirectShow</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="container">
+    <div class="footer-content">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="font-weight: 800; color: #fff;">NEMO</span>
+        <span>— Autonomous Windows Developer Operating Runtime</span>
+      </div>
+      <div>
+        Created by <a href="https://github.com/Omkar-Hundre" target="_blank" style="color: var(--cyan); font-weight: 600;">Omkar Hundre</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    const demos = [
+      {
+        cmd: 'nemo "snip the error popup on screen and search fix"',
+        steps: [
+          { tool: "desktop_integration", action: "{'action': 'snip_screen', 'target': 'error popup', 'search_fix': True}", thought: "Capturing desktop display and isolating error popup bounding box..." },
+          { tool: "web_researcher", action: "{'query': 'sqlite3.OperationalError database locked fix'}", thought: "Verifying top community solution for SQLite lock error..." }
+        ],
+        outcome: "Error popup snipped (420x180), copied to clipboard, and opened in Snip & Sketch.\n\nVerified Fix: Add timeout=15.0 or enable WAL mode: PRAGMA journal_mode=WAL;"
+      },
+      {
+        cmd: 'nemo "draw a red box around the submit button in screenshot.png"',
+        steps: [
+          { tool: "desktop_integration", action: "{'action': 'annotate_image', 'path': 'screenshot.png', 'shape': 'box', 'color': 'red', 'target': 'submit button'}", thought: "Locating button coordinates and rendering sharp rounded rectangle with 25% tint..." }
+        ],
+        outcome: "Red bounding box drawn properly around the submit button with pill badge label. Saved to screenshot_annotated.png, copied to clipboard, and opened in Snip & Sketch."
+      },
+      {
+        cmd: 'nemo "open 3-pane terminal with backend, frontend, and docker logs"',
+        steps: [
+          { tool: "desktop_integration", action: "{'action': 'terminal_layout', 'panes': ['backend', 'frontend', 'docker']}", thought: "Orchestrating Windows Terminal split-pane layout via direct subprocess invocation..." }
+        ],
+        outcome: "Opened 3-pane Windows Terminal layout with backend, frontend, and docker logs initialized in current workspace."
+      },
+      {
+        cmd: 'nemo "open YouTube in Chrome and play lofi beats"',
+        steps: [
+          { tool: "desktop_integration", action: "{'action': 'open_youtube', 'query': 'lofi beats'}", thought: "Resolving top YouTube videoId via fast regex search and launching Chrome with autoplay..." }
+        ],
+        outcome: "Discovered 'Lofi Hip Hop Radio - Beats to Relax/Study to' and initiated direct autoplay playback in Chrome."
+      },
+      {
+        cmd: 'nemo "record 10 seconds of mic audio"',
+        steps: [
+          { tool: "desktop_integration", action: "{'action': 'record_audio', 'duration_seconds': 10}", thought: "Recording raw uncompressed audio from default hardware microphone via winmm MCI..." }
+        ],
+        outcome: "Recorded 10 seconds of high-fidelity microphone audio and saved directly to mic_recording_10s.wav."
+      }
+    ];
+
+    function runDemo(index) {
+      const pills = document.querySelectorAll('.cmd-pill');
+      pills.forEach((p, i) => p.classList.toggle('active', i === index));
+
+      const d = demos[index];
+      const out = document.getElementById('demoOutput');
+      out.innerHTML = `
+        <div class="terminal-line">
+          <span class="prompt-prefix">PS D:\\Nemo&gt;</span>
+          <span>${d.cmd}</span>
+        </div>
+        <div style="color: var(--cyan); margin: 8px 0 4px;">Deliberating, executing, and verifying...</div>
+        ${d.steps.map(s => `
+          <div class="exec-step">
+            <div><span class="step-ok">✓</span><strong>${s.tool}</strong> <span style="color: #64748b;">${s.action}</span></div>
+            <div style="font-size: 0.82rem; color: #64748b; margin-top: 2px;">• ${s.thought}</div>
+          </div>
+        `).join('')}
+        <div class="outcome-box">
+          <div style="font-weight: 700; color: var(--green); margin-bottom: 6px;">[Final Outcome]</div>
+          <div>${d.outcome.replace(/\n/g, '<br>')}</div>
+        </div>
+      `;
+    }
+
+    function copyInstall() {
+      const cmd = "irm https://raw.githubusercontent.com/Omkar-Hundre/Nemo/main/scripts/install.ps1 | iex";
+      navigator.clipboard.writeText(cmd).then(() => {
+        const btn = document.querySelector('.copy-btn');
+        btn.innerText = "Copied!";
+        setTimeout(() => btn.innerText = "Copy Install", 2000);
+      });
+    }
+
+    // Run first demo initially
+    runDemo(0);
+  </script>
+</body>
+</html>

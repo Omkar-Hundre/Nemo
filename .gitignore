@@ -49,6 +49,7 @@ htmlcov/
 # Local databases & state
 data/
 *.svg
+!assets/*.svg
 *.sqlite3
 *.db
 
