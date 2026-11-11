@@ -1100,6 +1100,55 @@ def ask(
         sys.exit(1)
 
 
+@app.command("voice")
+def voice_avatar_cmd(
+    model: str = typer.Option("base.en", "--model", "-m", help="Local Whisper model (tiny.en, base.en)."),
+    autostart: bool = typer.Option(False, "--autostart", "-a", help="Enable automatic launch on Windows boot."),
+    disable_autostart: bool = typer.Option(False, "--disable-autostart", help="Disable launch on Windows boot."),
+    no_mic: bool = typer.Option(False, "--no-mic", help="Run floating avatar and GUI without microphone listener."),
+) -> None:
+    """Launch Nemo animated desktop avatar, hands-free voice listener, and process controller."""
+    from nemo.voice.autostart import set_autostart, is_autostart_enabled
+    from nemo.voice.service import NemoVoiceService
+
+    if disable_autostart:
+        set_autostart(False)
+        console.print("[green]Nemo desktop voice auto-start disabled.[/green]")
+        return
+
+    if autostart:
+        set_autostart(True)
+        console.print("[bold green]Nemo desktop voice auto-start enabled on Windows boot.[/bold green]")
+
+    console.print(Panel(
+        f"[bold cyan]Nemo Desktop Voice & Process Controller[/bold cyan]\n"
+        f"• [bold]Whisper Engine:[/bold] Local {model} (INT8)\n"
+        f"• [bold]Wake Word:[/bold] 'Nemo' / 'Hey Nemo'\n"
+        f"• [bold]Avatar:[/bold] Floating Finding Nemo Clownfish (Always-on-top)\n"
+        f"• [bold]Auto-Hide:[/bold] Enabled during fullscreen movies & gaming\n"
+        f"• [bold]Auto-Start:[/bold] {'[green]Enabled[/green]' if is_autostart_enabled() else '[dim]Disabled[/dim]'}\n\n"
+        f"[dim]Click Nemo or the status pill anytime to toggle the Process Controller GUI.[/dim]",
+        title="[bold green]NEMO OS Active[/bold green]",
+        border_style="cyan",
+    ))
+
+    service = NemoVoiceService(model_size=model, enable_voice=not no_mic)
+    try:
+        service.start(block=True)
+    except KeyboardInterrupt:
+        service.stop()
+        console.print("[dim]Nemo voice service closed.[/dim]")
+
+
+@app.command("avatar")
+def avatar_cmd(
+    model: str = typer.Option("base.en", "--model", "-m", help="Local Whisper model (tiny.en, base.en)."),
+    no_mic: bool = typer.Option(False, "--no-mic", help="Run floating avatar and GUI without microphone listener."),
+) -> None:
+    """Launch floating Finding Nemo avatar and Process Controller GUI."""
+    voice_avatar_cmd(model=model, no_mic=no_mic)
+
+
 # 6. Public exports
 __all__ = ["app", "main"]
 
@@ -1109,7 +1158,7 @@ def main() -> None:
     known_commands = {
         "chat", "setup", "version", "status", "doctor", "run", "daemon",
         "sessions", "memory", "project", "index", "ide", "worker", "task",
-        "history", "resume",
+        "history", "resume", "voice", "avatar",
         "dependencies", "verify", "diagnose", "ask", "remember",
         "--help", "-h", "--version", "-v",
     }
