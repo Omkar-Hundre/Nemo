@@ -54,7 +54,6 @@ from nemo.intelligence.scanner import ProjectScanner
 from nemo.memory.repository import MemoryRepository
 from nemo.security.policy import SecurityPolicy
 from nemo.tools.base import BaseTool, ToolDefinition
-from nemo.voice.speaker import VoiceSpeaker
 
 # 4. Types, Protocols, Schemas
 # (None)
@@ -3404,98 +3403,6 @@ class WindowsGuiTool(BaseTool):
             return ToolResult(success=False, error=f"GUI automation error: {exc}")
 
 
-class SpeakTool(BaseTool):
-    """Text-to-speech tool using Microsoft Natural Neural Voices with human intonation and emotion."""
-    name = "voice_speak"
-    description = (
-        "Speak text aloud using Microsoft Natural Neural voices (Jenny, Guy, Aria, Prabhat, Neerja) "
-        "with human emotion, humor, and natural speed, or synthesize speech to an MP3 file."
-    )
-    risk_level = RiskLevel.L0
-
-    def get_definition(self) -> ToolDefinition:
-        return ToolDefinition(
-            name=self.name,
-            description=self.description,
-            parameters={
-                "type": "object",
-                "properties": {
-                    "text": {
-                        "type": "string",
-                        "description": "Text message to speak aloud.",
-                    },
-                    "voice": {
-                        "type": "string",
-                        "description": "Voice persona ('jenny', 'guy', 'aria', 'prabhat', 'neerja', default: 'jenny').",
-                        "default": "jenny",
-                    },
-                    "rate": {
-                        "type": "string",
-                        "description": "Speech rate modifier (e.g. '+15%', '+0%', '-10%', default: '+15%').",
-                        "default": "+15%",
-                    },
-                    "save_to": {
-                        "type": "string",
-                        "description": "Optional destination file path to save synthesized MP3 audio file.",
-                    },
-                    "play": {
-                        "type": "boolean",
-                        "description": "Whether to play synthesized audio aloud through speakers (default: true).",
-                        "default": True,
-                    },
-                },
-                "required": ["text"],
-            },
-            risk_level=self.risk_level,
-        )
-
-    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
-        text = arguments.get("text", "").strip()
-        if not text:
-            return ToolResult(success=False, error="text parameter is required.")
-
-        voice = arguments.get("voice", "jenny")
-        rate = arguments.get("rate", "+15%")
-        save_to = arguments.get("save_to")
-        play = arguments.get("play", True)
-
-        try:
-            speaker = VoiceSpeaker(default_voice=voice, default_rate=rate)
-            resolved_voice = speaker.resolve_voice(voice)
-
-            if save_to:
-                target_path = Path(save_to).resolve()
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                audio_file = await speaker.generate_speech(text, voice=resolved_voice, rate=rate, output_file=target_path)
-                if play and platform.system() == "Windows":
-                    speaker.play_audio(audio_file, wait=False)
-                return ToolResult(
-                    success=True,
-                    data={
-                        "action": "synthesize",
-                        "voice": resolved_voice,
-                        "rate": rate,
-                        "file": str(audio_file),
-                        "played": play,
-                        "bytes": audio_file.stat().st_size,
-                    },
-                )
-            else:
-                played = await speaker.speak(text, voice=resolved_voice, rate=rate, wait=False)
-                return ToolResult(
-                    success=True,
-                    data={
-                        "action": "speak",
-                        "voice": resolved_voice,
-                        "rate": rate,
-                        "text": text,
-                        "played": played,
-                    },
-                )
-        except Exception as exc:
-            return ToolResult(success=False, error=f"Voice synthesis error: {exc}")
-
-
 # 6. Public exports
 __all__ = [
     "CodebaseSummaryTool",
@@ -3532,5 +3439,4 @@ __all__ = [
     "WindowsDesktopTool",
     "WebResearcherTool",
     "WindowsGuiTool",
-    "SpeakTool",
 ]

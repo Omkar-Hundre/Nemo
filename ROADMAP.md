@@ -20,10 +20,6 @@ All foundational systems are built natively using existing dependencies, zero un
   - PyPI package specifications, versions, licenses, and dependencies via official PyPI JSON API.
   - Wikipedia encyclopedic concept definitions via Wikipedia REST API.
   - Deep multi-source research synthesis combining search citations with extracted article text.
-- **Microsoft Natural Neural Voice Engine** (`nemo.voice.speaker`, `voice_speak`, `nemo speak`):
-  - High-fidelity human-like speech powered by Microsoft Natural Neural TTS (`edge-tts` at `+15%` rate).
-  - Personas: Jenny, Guy, Aria, Prabhat, Neerja.
-  - Native Windows Multimedia playback (`winmm.dll`) with zero external audio dependencies.
 - **Windows Desktop GUI Automation** (`gui_automation`):
   - Direct accessibility-tree desktop automation via `pywinauto` (UIA backend) and Win32 desktop binding.
   - Launch applications (`notepad`, `calc`, `code`), list active windows with PIDs.
@@ -52,7 +48,7 @@ All foundational systems are built natively using existing dependencies, zero un
 
 ---
 
-## 2. Voice Control & Autonomous Desktop GUI Automation (The Next Leap)
+## 2. Autonomous Desktop GUI & Web Intelligence Engine
 
 ```
                             ┌────────────────────────┐
@@ -60,60 +56,39 @@ All foundational systems are built natively using existing dependencies, zero un
                             │   Logon Auto-Start     │
                             └───────────┬────────────┘
                                         │
-                          [Low-Power Audio Thread]
-                                        ▼
-                              ┌───────────────────┐
-                              │ Wake-Word Engine  │
-                              │   "Nemo / Hey"    │
-                              └─────────┬─────────┘
-                                        │ Triggered
-                                        ▼
-                              ┌───────────────────┐
-                              │ Speech-to-Text    │
-                              │ (Fast STT Engine) │
-                              └─────────┬─────────┘
-                                        │ Intent
                                         ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                    NEMO Agentic Operating Core                          │
 │         (NVIDIA Nemotron Super VL 120B + Context + Memory)              │
 └───────────────┬───────────────────────────────────────┬─────────────────┘
-                │ Action / Tool Call                    │ Conversational Voice
+                │ Action / Tool Call                    │ Live Research
                 ▼                                       ▼
     ┌───────────────────────┐               ┌────────────────────────┐
-    │  Windows GUI Engine   │               │  Microsoft Neural TTS  │
-    │ (pywinauto + UIA Tree)│               │ (`edge-tts` Natural)   │
+    │  Windows GUI Engine   │               │ Web Researcher & Docs  │
+    │ (pywinauto + UIA Tree)│               │ (DDGS + Trafilatura)   │
     └───────────────────────┘               └────────────────────────┘
 ```
 
-### A. Microsoft Neural Text-to-Speech Engine (`nemo.voice.speaker`)
-- **No Robotic Voices**: Replaces legacy SAPI5 robotic speech with Microsoft’s natural neural voices (the same models powering Microsoft Copilot and Edge).
-- **Available Personas**:
-  - `en-US-JennyNeural`: Warm, natural, friendly conversational assistant.
-  - `en-US-GuyNeural`: Energetic, modern male companion.
-  - `en-IN-PrabhatNeural` / `en-IN-NeerjaNeural`: Natural Indian English with authentic cadence.
-- **Personality & Tone**:
-  - Dynamic rate (`+15%`) for energetic, non-boring conversational delivery.
-  - Humorous, sharp, human-touch responses configured through agent prompt steering.
-- **Portability**: Uses `edge-tts`—100% free, keyless, and zero-configuration on any Windows machine.
+### A. Windows Logon Auto-Start Daemon (`nemo daemon autostart`)
+- **Auto-Boot**: Registers a lightweight Windows startup script in `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` so NEMO initializes silently when your laptop powers on.
+- **Resource Footprint**: Runs as a lightweight background daemon with zero administrator privilege requirements.
 
-### B. Background Voice Control & Wake-Word Listening (`nemo.voice.listener`)
-- **Wake Word**: Continuous low-power listening for *"Nemo"* or *"Hey Nemo"*.
-- **Local Speech-to-Text**: Low-latency transcription capturing natural voice requests.
-- **Hands-Free Task Dispatch**: Transcribed audio routes directly into `AgentOrchestrator.run_task` without opening a terminal window.
-
-### C. Windows Logon Auto-Start Daemon (`nemo.daemon.autostart`)
-- **Auto-Boot**: Registers a Windows Scheduled Task or `HKCU\...\Run` entry so NEMO initializes silently when your laptop powers on.
-- **Resource Footprint**: Runs as a lightweight background tray daemon (<25MB RAM in idle listening mode).
-
-### D. Windows Desktop GUI Automation Tool (`pywinauto` with UIA Backend)
+### B. Windows Desktop GUI Automation Tool (`WindowsGuiTool` / `gui_automation`)
 - **Why `pywinauto` (UIA)**: Unlike fragile pixel-coordinate tools (`pyautogui`) that break when windows move or display DPI scaling is set to 125%/150%, `pywinauto` queries Microsoft's native UI Automation accessibility tree (`AutomationId`, ControlType, Name).
 - **Key Capabilities**:
-  - `open_app(name)`: Launch apps (`notepad`, `calc`, `code`, `spotify`, `explorer`, browser).
-  - `click_control(window, control_name, control_type)`: Click buttons, menus, tabs.
-  - `type_text(window, text, control_name)`: Type into text fields, search bars, or editors.
-  - `window_action(window, action)`: Maximize, minimize, tile, focus, or close windows.
-  - `read_ui_tree(window)`: Inspect all accessible controls and text within an active window.
+  - `launch`: Launch apps (`notepad`, `calc`, `code`, `spotify`, `explorer`, browser).
+  - `click`: Click buttons, menus, tabs by name or Automation ID.
+  - `type_keys`: Type into text fields, search bars, or editors with hotkey support (`^s`, `{ENTER}`).
+  - `focus` / `minimize` / `maximize` / `restore` / `close`: Manage window display state.
+  - `inspect_tree`: Inspect all accessible controls and text within an active window.
+
+### C. Autonomous Web Researcher & Technical Doc Scraper (`WebResearcherTool` / `web_researcher`)
+- **Key Capabilities**:
+  - Live technical queries via DuckDuckGo.
+  - Clean documentation extraction via Trafilatura into structured Markdown without tag soup or ads.
+  - Direct PyPI JSON queries for dependency specifications and package metadata.
+  - Wikipedia REST API for clean encyclopedic summaries.
+  - Deep multi-source research synthesis combining search citations with extracted article text.
 
 ---
 
@@ -202,13 +177,11 @@ To make NEMO an indispensable, complete development runtime, the following compl
 | **Phase 2** | **Database Inspector** | `database_inspector` | Low | **COMPLETE (100% Tested)** |
 | **Phase 3** | **API Tester** | `api_tester` | Low | **COMPLETE (100% Tested)** |
 | **Phase 4** | **System & Desktop** | `system_inspector`, `desktop_integration` | Low | **COMPLETE (100% Tested)** |
-| **Phase 5** | **Natural Voice Engine** | `nemo.voice.speaker`, `voice_speak`, `nemo speak` | Medium | **COMPLETE (100% Tested)** |
-| **Phase 6** | **Windows GUI Automation** | `WindowsGuiTool` (`pywinauto` UIA) | Medium | **COMPLETE (100% Tested)** |
-| **Phase 7** | **Logon Auto-Start Daemon** | `nemo daemon autostart` | Low | **COMPLETE (100% Tested)** |
-| **Phase 8** | **Web Researcher & Doc Scraper** | `web_researcher` (DDGS + Trafilatura + PyPI + Wiki) | Medium | **COMPLETE (100% Tested)** |
-| **Phase 9** | **Continuous Wake-Word Listener** | `nemo.voice.listener` (`System.Speech` / STT) | Medium | In Progress |
-| **Phase 10** | **AST Semantic Refactoring** | `ast_refactor` (Python AST symbol rename) | Medium | Planned |
-| **Phase 11** | **Container Controller** | `docker_controller` (local Docker engine) | Medium | Planned |
+| **Phase 5** | **Windows GUI Automation** | `WindowsGuiTool` (`pywinauto` UIA) | Medium | **COMPLETE (100% Tested)** |
+| **Phase 6** | **Logon Auto-Start Daemon** | `nemo daemon autostart` | Low | **COMPLETE (100% Tested)** |
+| **Phase 7** | **Web Researcher & Doc Scraper** | `web_researcher` (DDGS + Trafilatura + PyPI + Wiki) | Medium | **COMPLETE (100% Tested)** |
+| **Phase 8** | **AST Semantic Refactoring** | `ast_refactor` (Python AST symbol rename) | Medium | Planned |
+| **Phase 9** | **Container Controller** | `docker_controller` (local Docker engine) | Medium | Planned |
 
 ---
 

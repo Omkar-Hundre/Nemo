@@ -1,12 +1,18 @@
 """Production-grade in-depth test suite for WebResearcherTool.
 
 Covers:
+- Tool definition and parameter schemas
 - Live web search via DuckDuckGo (title, url, snippet)
+- Search result limits and bounds enforcement
 - Clean document/article extraction via Trafilatura (no HTML tags, pure markdown with metadata)
+- Max chars truncation on document extraction
+- Graceful error boundaries on unreachable/invalid URLs
 - PyPI package technical specifications & dependency lookups
-- Wikipedia encyclopedic definitions and summaries
+- PyPI 404 package handling and missing argument validation
+- Wikipedia encyclopedic definitions, summaries, and desktop URLs
+- Wikipedia 404 topic handling and missing argument validation
 - Multi-source autonomous research synthesis
-- Error boundaries (invalid URLs, missing queries, 404 packages)
+- Input argument boundaries and unsupported action handling
 """
 
 # 1. Standard library imports
@@ -22,13 +28,33 @@ from nemo.tools.builtin import WebResearcherTool
 # (None)
 
 # 5. Core logic / classes / functions
+def test_web_researcher_definition():
+    """Verify web_researcher tool metadata, schema, and allowed actions."""
+    tool = WebResearcherTool()
+    defn = tool.get_definition()
+    assert defn.name == "web_researcher"
+    assert "search" in defn.description.lower()
+    props = defn.parameters["properties"]
+    assert "action" in props
+    assert "query" in props
+    assert "url" in props
+    assert "package_name" in props
+    assert "limit" in props
+    assert "max_chars" in props
+    allowed_actions = props["action"]["enum"]
+    assert "search" in allowed_actions
+    assert "fetch_doc" in allowed_actions
+    assert "pypi" in allowed_actions
+    assert "wiki" in allowed_actions
+    assert "research" in allowed_actions
+
+
 @pytest.mark.asyncio
 async def test_web_researcher_search_duckduckgo():
     """Verify web_researcher searches live web and returns structured results."""
     tool = WebResearcherTool()
     res = await tool.execute({"action": "search", "query": "python fastapi documentation", "limit": 3}, {})
     if not res.success or res.data.get("count", 0) == 0:
-        # In case of remote engine rate limiting during full suite runs, retry with simple query
         await asyncio.sleep(1.0)
         res = await tool.execute({"action": "search", "query": "fastapi", "limit": 3}, {})
     assert res.success
@@ -43,10 +69,20 @@ async def test_web_researcher_search_duckduckgo():
 
 
 @pytest.mark.asyncio
+async def test_web_researcher_search_custom_limit():
+    """Verify web_researcher respects custom limit parameter."""
+    tool = WebResearcherTool()
+    res = await tool.execute({"action": "search", "query": "python", "limit": 2}, {})
+    assert res.success
+    data = res.data
+    assert data["count"] <= 2
+    assert len(data["results"]) <= 2
+
+
+@pytest.mark.asyncio
 async def test_web_researcher_fetch_doc_markdown_clean():
     """Verify web_researcher extracts pure structured Markdown from documentation pages."""
     tool = WebResearcherTool()
-    # Test on public MDN documentation page
     res = await tool.execute(
         {
             "action": "fetch_doc",
@@ -65,6 +101,31 @@ async def test_web_researcher_fetch_doc_markdown_clean():
 
 
 @pytest.mark.asyncio
+async def test_web_researcher_fetch_doc_max_chars():
+    """Verify web_researcher truncates extracted documentation to max_chars."""
+    tool = WebResearcherTool()
+    res = await tool.execute(
+        {
+            "action": "fetch_doc",
+            "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Guide/Closures",
+            "max_chars": 350,
+        },
+        {},
+    )
+    assert res.success
+    assert len(res.data["content"]) <= 350
+
+
+@pytest.mark.asyncio
+async def test_web_researcher_fetch_doc_invalid_url():
+    """Verify web_researcher gracefully handles unreachable or invalid URLs."""
+    tool = WebResearcherTool()
+    res = await tool.execute({"action": "fetch_doc", "url": "https://unreachable-domain-xyz-987654321.com/doc"}, {})
+    assert res.success is False
+    assert "failed to fetch content" in res.error.lower() or "document extraction failed" in res.error.lower()
+
+
+@pytest.mark.asyncio
 async def test_web_researcher_pypi_package_lookup():
     """Verify web_researcher queries PyPI API and returns structured package metadata."""
     tool = WebResearcherTool()
@@ -79,12 +140,32 @@ async def test_web_researcher_pypi_package_lookup():
 
 
 @pytest.mark.asyncio
+async def test_web_researcher_pypi_query_fallback():
+    """Verify web_researcher accepts query argument as package_name fallback."""
+    tool = WebResearcherTool()
+    res = await tool.execute({"action": "pypi", "query": "httpx"}, {})
+    assert res.success
+    data = res.data
+    assert data["name"].lower() == "httpx"
+    assert len(data["latest_version"]) > 0
+
+
+@pytest.mark.asyncio
 async def test_web_researcher_pypi_nonexistent_package():
     """Verify web_researcher reports clean error when Python package is not found on PyPI."""
     tool = WebResearcherTool()
     res = await tool.execute({"action": "pypi", "package_name": "nonexistent_pkg_random_xyz_99999"}, {})
     assert res.success is False
     assert "was not found on pypi" in res.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_web_researcher_pypi_missing_param():
+    """Verify web_researcher requires package_name for pypi action."""
+    tool = WebResearcherTool()
+    res = await tool.execute({"action": "pypi"}, {})
+    assert res.success is False
+    assert "package_name is required" in res.error.lower()
 
 
 @pytest.mark.asyncio
@@ -111,6 +192,15 @@ async def test_web_researcher_wiki_nonexistent_topic():
 
 
 @pytest.mark.asyncio
+async def test_web_researcher_wiki_missing_query():
+    """Verify web_researcher requires query for wiki action."""
+    tool = WebResearcherTool()
+    res = await tool.execute({"action": "wiki"}, {})
+    assert res.success is False
+    assert "query parameter is required" in res.error.lower()
+
+
+@pytest.mark.asyncio
 async def test_web_researcher_research_synthesis():
     """Verify web_researcher research action combines search citations with deep article text."""
     tool = WebResearcherTool()
@@ -123,7 +213,6 @@ async def test_web_researcher_research_synthesis():
     assert data["action"] == "research"
     assert data["sources_count"] > 0
     assert len(data["sources"]) > 0
-    # Deep extracted content should be populated from top source
     assert len(data["deep_extracted_content"]) > 0
 
 
@@ -142,30 +231,12 @@ async def test_web_researcher_missing_action_or_query():
     assert res_no_url.success is False
     assert "url parameter is required" in res_no_url.error.lower()
 
+    # Missing query in research
+    res_no_res_q = await tool.execute({"action": "research"}, {})
+    assert res_no_res_q.success is False
+    assert "query parameter is required" in res_no_res_q.error.lower()
+
     # Unsupported action
     res_invalid = await tool.execute({"action": "magic_action"}, {})
     assert res_invalid.success is False
     assert "unsupported research action" in res_invalid.error.lower()
-
-
-@pytest.mark.asyncio
-async def test_web_researcher_fetch_doc_invalid_url():
-    """Verify web_researcher gracefully handles unreachable or invalid URLs."""
-    tool = WebResearcherTool()
-    res = await tool.execute({"action": "fetch_doc", "url": "https://unreachable-domain-123456789.com/doc"}, {})
-    assert res.success is False
-    assert "failed to fetch content" in res.error.lower() or "document extraction failed" in res.error.lower()
-
-
-# 6. Public exports
-__all__ = [
-    "test_web_researcher_search_duckduckgo",
-    "test_web_researcher_fetch_doc_markdown_clean",
-    "test_web_researcher_pypi_package_lookup",
-    "test_web_researcher_pypi_nonexistent_package",
-    "test_web_researcher_wiki_concept_definition",
-    "test_web_researcher_wiki_nonexistent_topic",
-    "test_web_researcher_research_synthesis",
-    "test_web_researcher_missing_action_or_query",
-    "test_web_researcher_fetch_doc_invalid_url",
-]

@@ -37,3 +37,4 @@ def test_daemon_autostart_logic(monkeypatch):
         # Simulate disable
         script_path.unlink()
         assert not script_path.exists()
+

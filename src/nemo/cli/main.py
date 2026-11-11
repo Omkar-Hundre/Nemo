@@ -1100,38 +1100,6 @@ def ask(
         sys.exit(1)
 
 
-@app.command()
-def speak(
-    text: str = typer.Argument(..., help="Text message to speak aloud using Microsoft Neural Voice."),
-    voice: str = typer.Option("jenny", "--voice", "-v", help="Persona alias ('jenny', 'guy', 'aria', 'prabhat', 'neerja')."),
-    rate: str = typer.Option("+15%", "--rate", "-r", help="Speaking speed rate (e.g. '+15%', '+0%')."),
-    save: str | None = typer.Option(None, "--save", "-s", help="Save synthesized MP3 to specified file path."),
-    play: bool = typer.Option(True, "--play/--no-play", help="Play audio immediately through system speakers."),
-) -> None:
-    """Speak text aloud using Microsoft Natural Neural Voices with human intonation and emotion."""
-    async def _speak():
-        from nemo.voice.speaker import VoiceSpeaker
-        speaker = VoiceSpeaker(default_voice=voice, default_rate=rate)
-        resolved_voice = speaker.resolve_voice(voice)
-        console.print(f"[bold cyan]Synthesizing ({resolved_voice} @ {rate}):[/bold cyan] {text}")
-
-        if save:
-            out_path = Path(save).resolve()
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            saved = await speaker.generate_speech(text, voice=resolved_voice, rate=rate, output_file=out_path)
-            console.print(f"[green]Audio saved to: {saved} ({saved.stat().st_size} bytes)[/green]")
-            if play and platform.system() == "Windows":
-                speaker.play_audio(saved, wait=True)
-        else:
-            played = await speaker.speak(text, voice=resolved_voice, rate=rate, wait=True)
-            if played:
-                console.print("[green]Playback completed.[/green]")
-            else:
-                console.print("[yellow]Audio synthesized (playback skipped or audio device busy).[/yellow]")
-
-    asyncio.run(_speak())
-
-
 # 6. Public exports
 __all__ = ["app", "main"]
 
@@ -1141,7 +1109,7 @@ def main() -> None:
     known_commands = {
         "chat", "setup", "version", "status", "doctor", "run", "daemon",
         "sessions", "memory", "project", "index", "ide", "worker", "task",
-        "history", "resume", "speak",
+        "history", "resume",
         "dependencies", "verify", "diagnose", "ask", "remember",
         "--help", "-h", "--version", "-v",
     }

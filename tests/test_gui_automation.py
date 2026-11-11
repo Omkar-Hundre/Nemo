@@ -109,3 +109,4 @@ async def test_gui_tool_validation_errors():
     res_unsupported = await tool.execute({"action": "quantum_teleport"}, {})
     assert res_unsupported.success is False
     assert "unsupported gui action" in res_unsupported.error.lower()
+

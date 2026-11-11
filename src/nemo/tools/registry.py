@@ -38,7 +38,6 @@ from nemo.tools.builtin import (
     ReadFileTool,
     ScaffoldProjectTool,
     SemanticSearchTool,
-    SpeakTool,
     SymbolLookupTool,
     SystemInspectorTool,
     TerminalTool,
@@ -97,7 +96,7 @@ class ToolRegistry:
         self.register(MemoryRecallTool())
         self.register(IDEOpenTool())
 
-        # 5. Core Developer Beast Tools (Git, Database, API, System, Desktop, Research, GUI, Voice)
+        # 5. Core Developer Beast Tools (Git, Database, API, System, Desktop, Research, GUI)
         self.register(GitOperationsTool())
         self.register(DatabaseExplorerTool(policy=self.policy))
         self.register(ApiTesterTool())
@@ -105,7 +104,6 @@ class ToolRegistry:
         self.register(WindowsDesktopTool())
         self.register(WebResearcherTool())
         self.register(WindowsGuiTool())
-        self.register(SpeakTool())
 
     def register(self, tool: BaseTool) -> None:
         """Register a new tool."""

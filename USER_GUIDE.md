@@ -28,16 +28,15 @@ This guide is designed to be your permanent handbook. Whether you are using NEMO
    - [4. Live Windows System & Hardware Inspector (`system_inspector`)](#4-live-windows-system--hardware-inspector-system_inspector)
    - [5. Windows Clipboard & Toast Notifications (`desktop_integration`)](#5-windows-clipboard--toast-notifications-desktop_integration)
 6. [Autonomous Web Researcher & Technical Doc Scraper (`web_researcher`)](#6-autonomous-web-researcher--technical-doc-scraper-web_researcher)
-7. [Microsoft Natural Neural Voice (`voice_speak` & `nemo speak`)](#7-microsoft-natural-neural-voice-voice_speak--nemo-speak)
-8. [Autonomous Windows Desktop GUI Automation (`gui_automation`)](#8-autonomous-windows-desktop-gui-automation-gui_automation)
-9. [Background Daemon & Auto-Start on Laptop Boot](#9-background-daemon--auto-start-on-laptop-boot)
-10. [Document & Presentation Intelligence](#10-document--presentation-intelligence)
+7. [Autonomous Windows Desktop GUI Automation (`gui_automation`)](#7-autonomous-windows-desktop-gui-automation-gui_automation)
+8. [Background Daemon & Auto-Start on Laptop Boot](#8-background-daemon--auto-start-on-laptop-boot)
+9. [Document & Presentation Intelligence](#9-document--presentation-intelligence)
    - [Creating Styled Word Documents (.docx)](#creating-styled-word-documents-docx)
    - [Reading Documents (.docx, .pdf, .csv, .tsv)](#reading-documents-docx-pdf-csv-tsv)
    - [Generating Interactive Slide Presentations](#generating-interactive-slide-presentations)
-11. [Deployment & Safety Auditing](#11-deployment--safety-auditing)
-12. [Real-World Step-by-Step Workflows](#12-real-world-step-by-step-workflows)
-13. [Troubleshooting & FAQs](#13-troubleshooting--faqs)
+10. [Deployment & Safety Auditing](#10-deployment--safety-auditing)
+11. [Real-World Step-by-Step Workflows](#11-real-world-step-by-step-workflows)
+12. [Troubleshooting & FAQs](#12-troubleshooting--faqs)
 
 ---
 
@@ -259,35 +258,7 @@ nemo "fetch the documentation at https://fastapi.tiangolo.com/tutorial/ and summ
 
 ---
 
-## 7. Microsoft Natural Neural Voice (`voice_speak` & `nemo speak`)
-
-NEMO features human-like, expressive speech powered by Microsoft Natural Neural Text-to-Speech voices. It completely avoids legacy robotic SAPI5 voices, speaking with natural intonation, humor, and a responsive `+15%` speaking speed:
-
-### Available Voice Personas:
-- **`jenny`** (`en-US-JennyNeural`): Warm, natural, and expressive (default).
-- **`guy`** (`en-US-GuyNeural`): Friendly, conversational, and energetic.
-- **`aria`** (`en-US-AriaNeural`): Crisp, professional, and clear.
-- **`prabhat`** (`en-IN-PrabhatNeural`): Confident, clear Indian English.
-- **`neerja`** (`en-IN-NeerjaNeural`): Expressive, articulate Indian English.
-
-### Using Voice in CLI & Natural Language:
-```powershell
-# Speak text aloud immediately through your speakers:
-nemo speak "Hello Omkar, your full test suite passed with 145 tests!"
-
-# Use a different persona and speed:
-nemo speak "Let's review the pull request before deploying." --voice guy --rate +20%
-
-# Synthesize speech to an MP3 file:
-nemo speak "Architecture report generated successfully." --save docs/announcement.mp3 --no-play
-
-# Ask NEMO in chat or tasks to speak back:
-nemo "run the tests, fix any errors, and speak the final summary aloud"
-```
-
----
-
-## 8. Autonomous Windows Desktop GUI Automation (`gui_automation`)
+## 7. Autonomous Windows Desktop GUI Automation (`gui_automation`)
 
 Control and automate Windows desktop applications directly using Microsoft UI Automation (UIA) and native Win32. Unlike fragile image-matching frameworks, NEMO directly inspects the Windows accessibility control tree—making it immune to 125%/150% DPI scaling and theme changes:
 
@@ -309,7 +280,7 @@ nemo "list all open windows on my desktop and tell me their process IDs"
 
 ---
 
-## 9. Background Daemon & Auto-Start on Laptop Boot
+## 8. Background Daemon & Auto-Start on Laptop Boot
 
 To have NEMO ready in the background whenever you open your laptop:
 
@@ -333,7 +304,7 @@ When enabled, NEMO registers a lightweight, non-blocking startup script in `%APP
 
 ---
 
-## 10. Document & Presentation Intelligence
+## 9. Document & Presentation Intelligence
 
 NEMO can author and read enterprise-grade documents without third-party office software installed.
 
@@ -372,7 +343,7 @@ nemo "generate a slide deck at presentation.html explaining our Q1 engineering r
 
 ---
 
-## 11. Deployment & Safety Auditing
+## 10. Deployment & Safety Auditing
 
 Before you push code to GitHub or deploy to Netlify/Vercel, ask NEMO to audit your workspace:
 
@@ -389,7 +360,7 @@ NEMO automatically scans for:
 
 ---
 
-## 12. Real-World Step-by-Step Workflows
+## 11. Real-World Step-by-Step Workflows
 
 ### Workflow 1: "I Just Cloned a New Repository"
 ```powershell
@@ -416,7 +387,7 @@ nemo "run the tests, audit for secret leaks, stage modified files, commit with a
 
 ---
 
-## 13. Troubleshooting & FAQs
+## 12. Troubleshooting & FAQs
 
 #### Q: Where does NEMO store my session history and memories?
 **A:** Everything is stored locally on your machine in a SQLite database at:  
