@@ -1,164 +1,155 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 480" width="100%" height="100%">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 380" width="100%" height="100%">
   <defs>
-    <radialGradient id="archBg" cx="50%" cy="50%" r="70%">
-      <stop offset="0%" stop-color="#0e1524" />
-      <stop offset="100%" stop-color="#05080f" />
-    </radialGradient>
-    <linearGradient id="cyanBorder" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#00f0ff" />
-      <stop offset="100%" stop-color="#0066ff" />
-    </linearGradient>
-    <linearGradient id="orangeBorder" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#ff7a00" />
-      <stop offset="100%" stop-color="#ff0055" />
-    </linearGradient>
     <style>
-      .title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 15px; font-weight: 700; fill: #ffffff; }
-      .desc { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 11.5px; fill: #8b9bb4; }
-      .item { font-family: "JetBrains Mono", Consolas, monospace; font-size: 11px; fill: #cbd5e1; }
-      .pill { font-family: "JetBrains Mono", Consolas, monospace; font-size: 10px; font-weight: 700; }
+      .bg { fill: #0a0d14; }
+      .frame { stroke: #1e2638; stroke-width: 1; fill: none; }
+      .header-title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 16px; font-weight: 700; fill: #ffffff; }
+      .header-sub { font-family: "JetBrains Mono", Consolas, monospace; font-size: 11px; fill: #64748b; }
+      .col-box { fill: #0e131f; stroke: #1e293b; stroke-width: 1; }
+      .col-header { font-family: "JetBrains Mono", Consolas, monospace; font-size: 11px; font-weight: 600; fill: #38bdf8; }
+      .node-card { fill: #131a29; stroke: #232f46; stroke-width: 1; }
+      .node-card-active { fill: #131e33; stroke: #0284c7; stroke-width: 1; }
+      .node-name { font-family: "JetBrains Mono", Consolas, monospace; font-size: 12px; font-weight: 600; fill: #f1f5f9; }
+      .node-desc { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 11px; fill: #94a3b8; }
+      .wire { stroke: #334155; stroke-width: 1.5; fill: none; }
+      .wire-active { stroke: #38bdf8; stroke-width: 1.5; stroke-dasharray: 4,4; fill: none; }
+      .arrow { fill: #334155; }
     </style>
   </defs>
 
-  <!-- Background -->
-  <rect width="960" height="480" rx="16" fill="url(#archBg)" stroke="#1a263d" stroke-width="1.5" />
+  <!-- Canvas -->
+  <rect width="960" height="380" rx="8" class="bg" />
+  <rect width="960" height="380" rx="8" class="frame" />
 
-  <!-- Section Header -->
-  <text x="480" y="38" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="20" font-weight="800" fill="#ffffff" letter-spacing="-0.5">
-    NEMO Autonomous Voice &amp; Windows Operating Architecture
-  </text>
-  <text x="480" y="60" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12" fill="#00f0ff">
-    End-to-End Execution Flow • Sub-200ms Local Inference • Ground-Truth Verified
-  </text>
+  <!-- Title Row -->
+  <g transform="translate(36, 32)">
+    <text x="0" y="0" class="header-title">Nemo Runtime Architecture</text>
+    <text x="0" y="20" class="header-sub">Deterministic pipeline: intent parsing → context graph → tool matrix → verification</text>
+  </g>
 
-  <!-- 4 Columns / Blocks -->
-  
-  <!-- Column 1: Audio Ingestion -->
-  <g transform="translate(40, 90)">
-    <rect width="200" height="340" rx="12" fill="#090d16" stroke="url(#cyanBorder)" stroke-width="1.5" />
-    <rect x="12" y="14" width="60" height="20" rx="4" fill="#00f0ff" opacity="0.15" />
-    <text x="18" y="28" fill="#00f0ff" class="pill">LAYER 1</text>
-    <text x="14" y="58" class="title">Audio Engine</text>
-    <text x="14" y="78" class="desc">Real-time local voice pipeline</text>
-    
-    <g transform="translate(14, 105)">
-      <rect width="172" height="42" rx="6" fill="#121a2b" stroke="#1f2d45" />
-      <text x="10" y="24" class="item">🎙️ WASAPI 44.1kHz</text>
-      <text x="10" y="36" class="desc">Zero-clip ring buffer</text>
+  <!-- Column 1: Ingestion -->
+  <g transform="translate(36, 76)">
+    <rect width="200" height="270" rx="6" class="col-box" />
+    <text x="16" y="24" class="col-header">01 / INGESTION</text>
+
+    <!-- Node 1.1: CLI -->
+    <g transform="translate(14, 40)">
+      <rect width="172" height="64" rx="4" class="node-card" />
+      <text x="12" y="24" class="node-name">CLI Commands</text>
+      <text x="12" y="44" class="node-desc">Direct terminal prompts &amp; flags</text>
     </g>
-    <g transform="translate(14, 158)">
-      <rect width="172" height="42" rx="6" fill="#121a2b" stroke="#1f2d45" />
-      <text x="10" y="24" class="item">🌊 WebRTC VAD</text>
-      <text x="10" y="36" class="desc">Noise &amp; silence gating</text>
+
+    <!-- Node 1.2: Terminal IPC -->
+    <g transform="translate(14, 114)">
+      <rect width="172" height="64" rx="4" class="node-card" />
+      <text x="12" y="24" class="node-name">Workspace Context</text>
+      <text x="12" y="44" class="node-desc">Auto-discovery of git &amp; files</text>
     </g>
-    <g transform="translate(14, 211)">
-      <rect width="172" height="42" rx="6" fill="#121a2b" stroke="#1f2d45" />
-      <text x="10" y="24" class="item">⚡ Wake-Word 'Nemo'</text>
-      <text x="10" y="36" class="desc">Sub-syllable detector</text>
-    </g>
-    <g transform="translate(14, 264)">
-      <rect width="172" height="42" rx="6" fill="#121a2b" stroke="#00f0ff" stroke-width="1" />
-      <text x="10" y="24" class="item" fill="#00f0ff">🧠 Whisper INT8</text>
-      <text x="10" y="36" class="desc">Sub-200ms local STT</text>
+
+    <!-- Node 1.3: Voice Layer -->
+    <g transform="translate(14, 188)">
+      <rect width="172" height="64" rx="4" class="node-card" />
+      <text x="12" y="24" class="node-name">Local Whisper INT8</text>
+      <text x="12" y="44" class="node-desc">Optional hands-free input</text>
     </g>
   </g>
 
-  <!-- Flow Arrow 1 -> 2 -->
-  <path d="M 245 260 L 265 260" stroke="#00f0ff" stroke-width="2" marker-end="url(#arrow)" />
+  <!-- Connectors 1 -> 2 -->
+  <path d="M 236 148 L 268 148" class="wire" />
+  <polygon points="268,145 274,148 268,151" class="arrow" />
 
-  <!-- Column 2: Idempotency & Queue -->
-  <g transform="translate(270, 90)">
-    <rect width="200" height="340" rx="12" fill="#090d16" stroke="#1f2d45" stroke-width="1.5" />
-    <rect x="12" y="14" width="60" height="20" rx="4" fill="#ff7a00" opacity="0.15" />
-    <text x="18" y="28" fill="#ff7a00" class="pill">LAYER 2</text>
-    <text x="14" y="58" class="title">Queue &amp; Policy</text>
-    <text x="14" y="78" class="desc">Concurrency &amp; idempotency</text>
+  <path d="M 236 222 L 254 222 L 254 180 L 268 180" class="wire" />
+  <polygon points="268,177 274,180 268,183" class="arrow" />
 
-    <g transform="translate(14, 105)">
-      <rect width="172" height="42" rx="6" fill="#121a2b" stroke="#1f2d45" />
-      <text x="10" y="24" class="item">🔒 Semantic Hash</text>
-      <text x="10" y="36" class="desc">15s duplicate debounce</text>
+  <path d="M 236 296 L 254 296 L 254 212 L 268 212" class="wire" />
+  <polygon points="268,209 274,212 268,215" class="arrow" />
+
+  <!-- Column 2: Context Graph & Normalizer -->
+  <g transform="translate(276, 76)">
+    <rect width="200" height="270" rx="6" class="col-box" />
+    <text x="16" y="24" class="col-header">02 / CONTEXT GRAPH</text>
+
+    <!-- Node 2.1: AST Codebase Parser -->
+    <g transform="translate(14, 40)">
+      <rect width="172" height="64" rx="4" class="node-card" />
+      <text x="12" y="24" class="node-name">AST Symbol Graph</text>
+      <text x="12" y="44" class="node-desc">Function &amp; class dependencies</text>
     </g>
-    <g transform="translate(14, 158)">
-      <rect width="172" height="42" rx="6" fill="#121a2b" stroke="#ff3b00" stroke-width="1" />
-      <text x="10" y="24" class="item" fill="#ff7a00">🛑 Tier 1: Control</text>
-      <text x="10" y="36" class="desc">'stop', 'cancel', 'pause'</text>
+
+    <!-- Node 2.2: Schema Introspector -->
+    <g transform="translate(14, 114)">
+      <rect width="172" height="64" rx="4" class="node-card" />
+      <text x="12" y="24" class="node-name">Schema Introspector</text>
+      <text x="12" y="44" class="node-desc">SQLite &amp; SQL table mapping</text>
     </g>
-    <g transform="translate(14, 211)">
-      <rect width="172" height="42" rx="6" fill="#121a2b" stroke="#1f2d45" />
-      <text x="10" y="24" class="item">📊 Tier 2: Query</text>
-      <text x="10" y="36" class="desc">Parallel background reads</text>
-    </g>
-    <g transform="translate(14, 264)">
-      <rect width="172" height="42" rx="6" fill="#121a2b" stroke="#1f2d45" />
-      <text x="10" y="24" class="item">⚙️ Tier 3: Task</text>
-      <text x="10" y="36" class="desc">FIFO mutating action queue</text>
+
+    <!-- Node 2.3: Idempotency Lock -->
+    <g transform="translate(14, 188)">
+      <rect width="172" height="64" rx="4" class="node-card" />
+      <text x="12" y="24" class="node-name">Intent Normalizer</text>
+      <text x="12" y="44" class="node-desc">Deduplication &amp; state cache</text>
     </g>
   </g>
 
-  <!-- Flow Arrow 2 -> 3 -->
-  <path d="M 475 260 L 495 260" stroke="#00f0ff" stroke-width="2" />
+  <!-- Connectors 2 -> 3 -->
+  <path d="M 476 180 L 508 180" class="wire" />
+  <polygon points="508,177 514,180 508,183" class="arrow" />
 
-  <!-- Column 3: Agent Orchestrator -->
-  <g transform="translate(500, 90)">
-    <rect width="200" height="340" rx="12" fill="#090d16" stroke="url(#cyanBorder)" stroke-width="1.5" />
-    <rect x="12" y="14" width="60" height="20" rx="4" fill="#00f0ff" opacity="0.15" />
-    <text x="18" y="28" fill="#00f0ff" class="pill">LAYER 3</text>
-    <text x="14" y="58" class="title">Agent Brain</text>
-    <text x="14" y="78" class="desc">Autonomous reasoning engine</text>
+  <!-- Column 3: Tool Matrix -->
+  <g transform="translate(516, 76)">
+    <rect width="200" height="270" rx="6" class="col-box" />
+    <text x="16" y="24" class="col-header">03 / TOOL MATRIX</text>
 
-    <g transform="translate(14, 105)">
-      <rect width="172" height="42" rx="6" fill="#121a2b" stroke="#1f2d45" />
-      <text x="10" y="24" class="item">🤖 Nemotron 120B</text>
-      <text x="10" y="36" class="desc">Autonomous planning</text>
+    <g transform="translate(14, 36)">
+      <rect width="172" height="38" rx="4" class="node-card" />
+      <text x="10" y="23" class="node-name">database_inspector</text>
     </g>
-    <g transform="translate(14, 158)">
-      <rect width="172" height="42" rx="6" fill="#121a2b" stroke="#1f2d45" />
-      <text x="10" y="24" class="item">🧠 Session Memory</text>
-      <text x="10" y="36" class="desc">Vector DB project context</text>
+    <g transform="translate(14, 80)">
+      <rect width="172" height="38" rx="4" class="node-card" />
+      <text x="10" y="23" class="node-name">api_tester (HTTP/ms)</text>
     </g>
-    <g transform="translate(14, 211)">
-      <rect width="172" height="42" rx="6" fill="#121a2b" stroke="#10b981" stroke-width="1" />
-      <text x="10" y="24" class="item" fill="#10b981">🛡️ Verification Gate</text>
-      <text x="10" y="36" class="desc">Zero-hallucination test check</text>
+    <g transform="translate(14, 124)">
+      <rect width="172" height="38" rx="4" class="node-card" />
+      <text x="10" y="23" class="node-name">git_operations</text>
     </g>
-    <g transform="translate(14, 264)">
-      <rect width="172" height="42" rx="6" fill="#121a2b" stroke="#1f2d45" />
-      <text x="10" y="24" class="item">🗣️ Microsoft SAPI</text>
-      <text x="10" y="36" class="desc">Concise voice feedback</text>
+    <g transform="translate(14, 168)">
+      <rect width="172" height="38" rx="4" class="node-card" />
+      <text x="10" y="23" class="node-name">system_inspector (RAM)</text>
+    </g>
+    <g transform="translate(14, 212)">
+      <rect width="172" height="38" rx="4" class="node-card" />
+      <text x="10" y="23" class="node-name">desktop_integration</text>
     </g>
   </g>
 
-  <!-- Flow Arrow 3 -> 4 -->
-  <path d="M 705 260 L 725 260" stroke="#00f0ff" stroke-width="2" />
+  <!-- Connectors 3 -> 4 -->
+  <path d="M 716 180 L 748 180" class="wire" />
+  <polygon points="748,177 754,180 748,183" class="arrow" />
 
-  <!-- Column 4: Execution Plane -->
-  <g transform="translate(730, 90)">
-    <rect width="190" height="340" rx="12" fill="#090d16" stroke="url(#orangeBorder)" stroke-width="1.5" />
-    <rect x="12" y="14" width="60" height="20" rx="4" fill="#ff7a00" opacity="0.15" />
-    <text x="18" y="28" fill="#ff7a00" class="pill">LAYER 4</text>
-    <text x="14" y="58" class="title">Windows Native</text>
-    <text x="14" y="78" class="desc">Hardware &amp; GUI execution</text>
+  <!-- Column 4: Verification Gate -->
+  <g transform="translate(756, 76)">
+    <rect width="168" height="270" rx="6" class="col-box" />
+    <text x="16" y="24" class="col-header">04 / VERIFY &amp; RUN</text>
 
-    <g transform="translate(12, 105)">
-      <rect width="166" height="42" rx="6" fill="#121a2b" stroke="#1f2d45" />
-      <text x="8" y="24" class="item">✂️ Snip &amp; Sketch</text>
-      <text x="8" y="36" class="desc">Vision crop &amp; web fix</text>
+    <!-- Node 4.1: Syntax & Gate -->
+    <g transform="translate(12, 40)">
+      <rect width="144" height="64" rx="4" class="node-card" />
+      <text x="10" y="24" class="node-name">Syntax Check</text>
+      <text x="10" y="44" class="node-desc">AST validity test</text>
     </g>
-    <g transform="translate(12, 158)">
-      <rect width="166" height="42" rx="6" fill="#121a2b" stroke="#1f2d45" />
-      <text x="8" y="24" class="item">🎨 Jarvis Canvas</text>
-      <text x="8" y="36" class="desc">Mathematical PIL shapes</text>
+
+    <!-- Node 4.2: Test Verification -->
+    <g transform="translate(12, 114)">
+      <rect width="144" height="64" rx="4" class="node-card-active" />
+      <text x="10" y="24" class="node-name" fill="#38bdf8">Regression Gate</text>
+      <text x="10" y="44" class="node-desc">42/42 tests verified</text>
     </g>
-    <g transform="translate(12, 211)">
-      <rect width="166" height="42" rx="6" fill="#121a2b" stroke="#1f2d45" />
-      <text x="8" y="24" class="item">🖥️ Terminal 3-Pane</text>
-      <text x="8" y="36" class="desc">Backend, frontend, logs</text>
-    </g>
-    <g transform="translate(12, 264)">
-      <rect width="166" height="42" rx="6" fill="#121a2b" stroke="#1f2d45" />
-      <text x="8" y="24" class="item">📹 DirectShow Cam</text>
-      <text x="8" y="36" class="desc">Headless webcam capture</text>
+
+    <!-- Node 4.3: Terminal Result -->
+    <g transform="translate(12, 188)">
+      <rect width="144" height="64" rx="4" class="node-card" />
+      <text x="10" y="24" class="node-name">Atomic Execution</text>
+      <text x="10" y="44" class="node-desc">Safe state applied</text>
     </g>
   </g>
 </svg>

@@ -53,3 +53,9 @@ data/
 *.sqlite3
 *.db
 
+# Netlify & Agent skill caches
+.netlify/
+.taste-skill/
+.agents/
+skills-lock.json
+
