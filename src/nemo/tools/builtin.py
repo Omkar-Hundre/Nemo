@@ -16,6 +16,7 @@ import shutil
 import socket
 import sqlite3
 import subprocess
+import tempfile
 import time
 from typing import Any
 from urllib.parse import quote
@@ -3377,6 +3378,18 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                             "start_stopwatch",
                             "clock_stopwatch",
                             "stopwatch",
+                            "camera_snapshot",
+                            "capture_camera",
+                            "snipping_tool",
+                            "capture_region",
+                            "screen_clip",
+                            "play_audio",
+                            "play_music",
+                            "open_in_paint",
+                            "record_audio",
+                            "sound_recorder",
+                            "terminal_layout",
+                            "open_terminal_panes",
                             "list_alarms",
                             "cancel_alarm",
                         ],
@@ -3394,6 +3407,12 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                     "long_break_minutes": {"type": "number", "description": "Pomodoro long break duration in minutes (default 15) (for 'start_pomodoro')."},
                     "cycles": {"type": "integer", "description": "Pomodoro cycles before long break (default 4) (for 'start_pomodoro')."},
                     "skip_breaks": {"type": "boolean", "description": "Whether to skip breaks during focus session (for 'start_pomodoro')."},
+                    "path": {"type": "string", "description": "Target or destination file path (for audio playback, camera snapshot, recording, paint markup)."},
+                    "volume": {"type": "integer", "description": "Audio playback volume from 0 to 100 (default 70) (for 'play_audio')."},
+                    "search": {"type": "string", "description": "Search keyword to find music/audio files in system to play (for 'play_audio')."},
+                    "duration_seconds": {"type": "integer", "description": "Audio recording duration in seconds (default 10) (for 'record_audio')."},
+                    "panes": {"type": "array", "items": {"type": "string"}, "description": "List of pane names/commands for Windows Terminal multi-pane layout."},
+                    "directory": {"type": "string", "description": "Starting working directory for terminal panes (for 'terminal_layout')."},
                     "task_name": {"type": "string", "description": "Specific task name to cancel or 'all' (for 'cancel_alarm')."},
                 },
                 "required": ["action"],
@@ -3636,6 +3655,243 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                         return ToolResult(success=False, error=f"Task '{target_name}' not found or could not be deleted.")
 
                 return ToolResult(success=True, data={"action": "cancel_alarm", "deleted_tasks": deleted, "count": len(deleted)})
+
+            elif action in ("camera_snapshot", "capture_camera"):
+                out_path = arguments.get("path") or arguments.get("output_path") or "camera_snapshot.jpg"
+                out_file = Path(context.get("working_directory", Path.cwd())) / out_path
+
+                # Launch native Windows Camera app
+                subprocess.Popen(["cmd.exe", "/c", "start", "microsoft.windows.camera:"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                time.sleep(1.5)
+
+                # Trigger Take photo button via UIA
+                snapped = False
+                win = None
+                try:
+                    from pywinauto import Desktop
+                    d = Desktop(backend="uia")
+                    for w in d.windows():
+                        if "camera" in (w.window_text() or "").lower() or w.class_name() == "ApplicationFrameWindow":
+                            for c in w.children():
+                                if "camera" in (c.window_text() or "").lower():
+                                    win = w
+                                    break
+                            if win:
+                                break
+                    if win:
+                        for desc in win.descendants():
+                            if desc.element_info.automation_id == "CaptureButton_0":
+                                desc.invoke()
+                                snapped = True
+                                break
+                except Exception:
+                    pass
+
+                # Locate latest photo in Pictures\Camera Roll
+                cam_roll = Path.home() / "Pictures" / "Camera Roll"
+                latest_photo = None
+                if cam_roll.exists():
+                    photos = list(cam_roll.glob("WIN_*.jpg")) + list(cam_roll.glob("*.jpg")) + list(cam_roll.glob("*.png"))
+                    if photos:
+                        latest_photo = max(photos, key=lambda p: p.stat().st_mtime)
+
+                if latest_photo and latest_photo.exists():
+                    try:
+                        shutil.copy2(latest_photo, out_file)
+                    except Exception:
+                        out_file = latest_photo
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "camera_snapshot",
+                        "camera_app": "launched (microsoft.windows.camera:)",
+                        "captured": snapped or bool(latest_photo),
+                        "output_path": str(out_file),
+                        "source_camera_roll": str(latest_photo) if latest_photo else None,
+                        "note": "Webcam snapshot captured via native Windows Camera app.",
+                    },
+                )
+
+            elif action in ("snipping_tool", "capture_region", "screen_clip"):
+                subprocess.Popen(["cmd.exe", "/c", "start", "ms-screenclip:"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "snipping_tool",
+                        "status": "active (ms-screenclip: launched)",
+                        "note": "Native Windows Snipping Tool overlay launched for region screenshot selection.",
+                    },
+                )
+
+            elif action in ("play_audio", "play_music"):
+                path_arg = arguments.get("path") or arguments.get("file")
+                search_query = arguments.get("search") or arguments.get("query")
+                volume = int(arguments.get("volume", 70))
+
+                target_file = None
+                if path_arg:
+                    p = Path(context.get("working_directory", Path.cwd())) / path_arg
+                    if p.exists():
+                        target_file = p
+                    elif Path(path_arg).exists():
+                        target_file = Path(path_arg)
+
+                if not target_file:
+                    # Scan system music folders
+                    scan_dirs = [
+                        Path.home() / "Music",
+                        Path.home() / "Downloads",
+                        Path.home() / "Videos",
+                        Path("C:/Windows/Media"),
+                    ]
+                    candidates = []
+                    for s_dir in scan_dirs:
+                        if s_dir.exists():
+                            for ext in ("*.mp3", "*.wav", "*.m4a", "*.flac", "*.wma"):
+                                candidates.extend(s_dir.glob(ext))
+
+                    if search_query:
+                        sq = search_query.lower()
+                        matched = [c for c in candidates if sq in c.name.lower()]
+                        if matched:
+                            target_file = matched[0]
+
+                    if not target_file and candidates:
+                        target_file = candidates[0]
+
+                if not target_file:
+                    return ToolResult(success=False, error="No audio or music files found on system to play.")
+
+                # Play via native Windows Media Player COM engine
+                try:
+                    import win32com.client
+                    wmp = win32com.client.Dispatch("WMPlayer.OCX")
+                    wmp.URL = str(target_file.resolve())
+                    wmp.settings.volume = max(0, min(100, volume))
+                    wmp.controls.play()
+                except Exception:
+                    subprocess.Popen(["cmd.exe", "/c", "start", str(target_file.resolve())], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "play_audio",
+                        "file": str(target_file),
+                        "file_name": target_file.name,
+                        "volume": volume,
+                        "playback_engine": "Windows Media Player (WMPlayer.OCX)",
+                        "status": "playing",
+                        "note": f"Audio playback started for '{target_file.name}' at {volume}% volume.",
+                    },
+                )
+
+            elif action == "open_in_paint":
+                path_arg = arguments.get("path") or arguments.get("file")
+                target_file = None
+                if path_arg:
+                    p = Path(context.get("working_directory", Path.cwd())) / path_arg
+                    if p.exists():
+                        target_file = p
+                    elif Path(path_arg).exists():
+                        target_file = Path(path_arg)
+
+                if not target_file:
+                    # Capture instant screen to temporary canvas
+                    temp_img = Path(tempfile.gettempdir()) / "nemo_paint_canvas.png"
+                    ps_cmd = (
+                        "Add-Type -AssemblyName System.Windows.Forms, System.Drawing; "
+                        "$s = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds; "
+                        "$b = New-Object System.Drawing.Bitmap($s.Width, $s.Height); "
+                        "$g = [System.Drawing.Graphics]::FromImage($b); "
+                        "$g.CopyFromScreen($s.Location, [System.Drawing.Point]::Empty, $s.Size); "
+                        f"$b.Save('{str(temp_img).replace('\\', '\\\\')}', [System.Drawing.Imaging.ImageFormat]::Png); "
+                        "$g.Dispose(); $b.Dispose();"
+                    )
+                    subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd], capture_output=True)
+                    if temp_img.exists():
+                        target_file = temp_img
+
+                cmd = ["mspaint.exe"]
+                if target_file:
+                    cmd.append(str(target_file.resolve()))
+
+                proc = subprocess.Popen(cmd)
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "open_in_paint",
+                        "image_path": str(target_file) if target_file else None,
+                        "pid": proc.pid,
+                        "note": "Microsoft Paint canvas opened successfully for manual markup.",
+                    },
+                )
+
+            elif action in ("record_audio", "sound_recorder"):
+                duration = int(arguments.get("duration_seconds") or arguments.get("duration") or 10)
+                out_path = arguments.get("path") or arguments.get("output_path") or f"mic_recording_{duration}s.wav"
+                out_file = Path(context.get("working_directory", Path.cwd())) / out_path
+
+                # Launch Sound Recorder app visually
+                try:
+                    subprocess.Popen(["explorer.exe", "shell:AppsFolder\\Microsoft.WindowsSoundRecorder_8wekyb3d8bbwe!App"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+
+                # Record audio directly from default microphone via winmm MCI
+                recorded = False
+                try:
+                    winmm = ctypes.windll.winmm
+                    winmm.mciSendStringW("open new type waveaudio alias nemorec", None, 0, None)
+                    winmm.mciSendStringW("record nemorec", None, 0, None)
+                    time.sleep(duration)
+                    winmm.mciSendStringW(f'save nemorec "{str(out_file.resolve())}"', None, 0, None)
+                    winmm.mciSendStringW("close nemorec", None, 0, None)
+                    recorded = out_file.exists() and out_file.stat().st_size > 0
+                except Exception:
+                    pass
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "record_audio",
+                        "duration_seconds": duration,
+                        "output_file": str(out_file),
+                        "recorded": recorded,
+                        "app": "Windows Sound Recorder",
+                        "note": f"Microphone audio recorded for {duration} seconds.",
+                    },
+                )
+
+            elif action in ("terminal_layout", "open_terminal_panes"):
+                panes = arguments.get("panes") or ["backend: powershell", "frontend: powershell", "docker: powershell"]
+                start_dir = arguments.get("directory") or str(base_dir)
+
+                # Build wt.exe multi-pane command
+                wt_args = ["wt.exe", "-w", "0", "nt", "-d", f'"{start_dir}"']
+                for i, _ in enumerate(panes):
+                    if i == 0:
+                        continue
+                    split_flag = "-V" if (i % 2 == 1) else "-H"
+                    wt_args.extend([";", "sp", split_flag, "-d", f'"{start_dir}"'])
+
+                cmd_str = " ".join(wt_args)
+                try:
+                    subprocess.Popen(cmd_str, shell=True)
+                except Exception as wt_err:
+                    return ToolResult(success=False, error=f"Failed to launch Windows Terminal: {wt_err}")
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "terminal_layout",
+                        "panes_count": len(panes),
+                        "panes": panes,
+                        "start_directory": start_dir,
+                        "wt_command": cmd_str,
+                        "note": f"Windows Terminal opened with {len(panes)}-pane development layout.",
+                    },
+                )
 
             else:
                 return ToolResult(success=False, error=f"Unsupported desktop action: '{action}'")

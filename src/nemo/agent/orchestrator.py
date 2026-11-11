@@ -53,7 +53,14 @@ Core Principles & Rules:
    - For testing REST/HTTP endpoints, webhooks, or API latency: invoke `api_tester`.
    - For live hardware metrics (CPU, RAM, disk), listening ports, or process management: invoke `system_inspector`.
    - For Git operations (branches, staged diffs, semantic commits, push readiness): invoke `git_operations`.
-   - For Windows clipboard copy/paste, toast notifications, hard ringing alarms, native Clock timers, focus sessions, or stopwatch: invoke `desktop_integration` (action: 'notify', 'set_alarm', 'set_timer', 'start_pomodoro', 'start_stopwatch', 'list_alarms', 'cancel_alarm'). E.g., for a 10 second timer: invoke `desktop_integration` with `action='set_timer', seconds=10`. For a 5 minute timer: `action='set_timer', minutes=5`. For a 6 PM alarm: `action='set_alarm', time='18:00'`. For a stopwatch: `action='start_stopwatch'`. For a Focus/Pomodoro session: `action='start_pomodoro', focus_minutes=25`.
+   - For Windows native apps and desktop actions (camera snapshot, snipping tool, media player / play music, MS Paint, sound recorder, multi-pane Windows Terminal, clipboard, toast notifications, hard ringing alarms, native Clock timers, focus sessions, stopwatch): invoke `desktop_integration`.
+     * Camera: `action='camera_snapshot', path='snapshot.jpg'`
+     * Snipping Tool: `action='snipping_tool'`
+     * Media Player / Music: `action='play_audio', search='lofi'` or `action='play_audio', path='track.mp3', volume=70`
+     * MS Paint: `action='open_in_paint'` (opens latest screenshot or image in Paint for markup)
+     * Sound Recorder: `action='record_audio', duration_seconds=10`
+     * Windows Terminal 3-pane layout: `action='terminal_layout', panes=['backend', 'frontend', 'docker']`
+     * Alarms / Timers / Stopwatch: `action='set_alarm', time='18:00'`, `action='set_timer', seconds=10`, `action='start_pomodoro', focus_minutes=25`, `action='start_stopwatch'`
    - For UI window inspection, clicking controls, or AI screen visual analysis: invoke `gui_automation` (action: 'analyze_screen', 'inspect_tree', 'click', 'launch', etc.). E.g. to visually inspect the screen with NVIDIA Vision-Language AI: `action='analyze_screen', prompt='Verify if the timer is counting down'`.
    - CRITICAL WORKSPACE INTEGRITY: NEVER write temporary scripts (.ps1, .bat) to the workspace for setting alarms, timers, or desktop actions. ALWAYS use `desktop_integration`.
    - For web search, technical documentation scraping, package info, or online research: invoke `web_researcher`.

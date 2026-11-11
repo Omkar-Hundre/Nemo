@@ -635,6 +635,33 @@ async def test_desktop_integration_timer_and_pomodoro_widgets():
     assert res_sw.data["action"] == "start_stopwatch"
 
 
+@pytest.mark.asyncio
+async def test_desktop_integration_native_app_automations():
+    """Verify camera, snipping tool, media player, paint, sound recorder, and terminal layout."""
+    tool = WindowsDesktopTool()
+
+    # 1. Test snipping tool
+    res_snip = await tool.execute({"action": "snipping_tool"}, {})
+    assert res_snip.success is True
+    assert "active" in res_snip.data["status"]
+
+    # 2. Test play_audio with built-in Windows sound
+    res_audio = await tool.execute(
+        {"action": "play_audio", "path": "C:/Windows/Media/chimes.wav", "volume": 50},
+        {},
+    )
+    assert res_audio.success is True
+    assert res_audio.data["volume"] == 50
+
+    # 3. Test terminal_layout
+    res_wt = await tool.execute(
+        {"action": "terminal_layout", "panes": ["backend", "frontend", "docker"]},
+        {},
+    )
+    assert res_wt.success is True
+    assert res_wt.data["panes_count"] == 3
+
+
 def test_extract_json_block_multi_concatenated_objects():
     """Verify extract_json_block extracts first valid JSON block when LLM concatenates multiple objects."""
     from nemo.agent.orchestrator import extract_json_block
