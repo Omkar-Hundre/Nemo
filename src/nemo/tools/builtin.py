@@ -2861,20 +2861,45 @@ class WindowsDesktopTool(BaseTool):
             elif action == "notify":
                 title = arguments.get("title", "NEMO Assistant")
                 msg = arguments.get("message", "Task completed.")
-                clean_title = title.replace('"', '\\"')
-                clean_msg = msg.replace('"', '\\"')
-                # Lightweight PowerShell balloon notification
-                cmd = (
-                    f'[void][System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms"); '
-                    f'$n = New-Object System.Windows.Forms.NotifyIcon; '
-                    f'$n.Icon = [System.Drawing.SystemIcons]::Information; '
-                    f'$n.BalloonTipTitle = "{clean_title}"; '
-                    f'$n.BalloonTipText = "{clean_msg}"; '
-                    f'$n.Visible = $True; '
-                    f'$n.ShowBalloonTip(2000);'
+                safe_title = str(title).replace("'", "''")
+                safe_msg = str(msg).replace("'", "''")
+
+                # Native modern Windows 10/11 WinRT toast notification with tray balloon fallback
+                ps_cmd = (
+                    f"$title = '{safe_title}'; "
+                    f"$msg = '{safe_msg}'; "
+                    f"try {{ "
+                    f"[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null; "
+                    f"$template = [Windows.UI.Notifications.ToastTemplateType]::ToastText02; "
+                    f"$xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($template); "
+                    f"$textNodes = $xml.GetElementsByTagName('text'); "
+                    f"$textNodes.Item(0).AppendChild($xml.CreateTextNode($title)) | Out-Null; "
+                    f"$textNodes.Item(1).AppendChild($xml.CreateTextNode($msg)) | Out-Null; "
+                    f"$toast = [Windows.UI.Notifications.ToastNotification]::new($xml); "
+                    f"$appId = '{{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}}\\WindowsPowerShell\\v1.0\\powershell.exe'; "
+                    f"$notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId); "
+                    f"$notifier.Show($toast); "
+                    f"}} catch {{ "
+                    f"[void][System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); "
+                    f"$n = New-Object System.Windows.Forms.NotifyIcon; "
+                    f"$n.Icon = [System.Drawing.SystemIcons]::Information; "
+                    f"$n.BalloonTipTitle = $title; "
+                    f"$n.BalloonTipText = $msg; "
+                    f"$n.Visible = $True; "
+                    f"$n.ShowBalloonTip(3000); "
+                    f"Start-Sleep -Seconds 3; "
+                    f"$n.Dispose(); "
+                    f"}}"
                 )
-                subprocess.Popen(["powershell", "-NoProfile", "-Command", cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                return ToolResult(success=True, data={"action": "notify", "title": title, "message": msg, "delivered": True})
+                subprocess.Popen(
+                    ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return ToolResult(
+                    success=True,
+                    data={"action": "notify", "title": title, "message": msg, "delivered": True},
+                )
 
             else:
                 return ToolResult(success=False, error=f"Unsupported desktop action: '{action}'")

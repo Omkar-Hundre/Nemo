@@ -57,7 +57,7 @@ Core Principles & Rules:
    - For web search, technical documentation scraping, package info, or online research: invoke `web_researcher`.
    - Never traverse folders recursively with `list_directory` when search or summary tools exist.
 5. CONVERSATIONAL & PATH CONTINUITY: If the user says 'that folder', 'that file', or references a previous step, resolve the path to the exact target folder/file referenced in Recent Context above, rather than defaulting to the current root.
-6. RESPONSE FORMAT: Output EXACTLY ONE JSON block:
+6. RESPONSE FORMAT: Output EXACTLY ONE JSON block per turn (never concatenate multiple tool calls or JSON blocks into one turn):
    For taking an action:
    ```json
    {{
@@ -86,16 +86,35 @@ def extract_json_block(text: str) -> dict[str, Any] | None:
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text_clean, re.DOTALL)
     candidate = match.group(1) if match else text_clean
     try:
-        return json.loads(candidate, strict=False)
+        res = json.loads(candidate, strict=False)
+        if isinstance(res, dict):
+            return res
     except Exception:
         pass
 
     match_obj = re.search(r"(\{.*\})", text_clean, re.DOTALL)
     if match_obj:
         try:
-            return json.loads(match_obj.group(1), strict=False)
+            res = json.loads(match_obj.group(1), strict=False)
+            if isinstance(res, dict):
+                return res
         except Exception:
             pass
+
+    # Ponytail: Parse first valid JSON object using raw_decode even when multiple JSON blocks are concatenated
+    decoder = json.JSONDecoder()
+    pos = 0
+    while pos < len(text_clean):
+        idx = text_clean.find("{", pos)
+        if idx == -1:
+            break
+        try:
+            obj, _ = decoder.raw_decode(text_clean[idx:])
+            if isinstance(obj, dict) and ("action" in obj or "tool" in obj or "thought" in obj):
+                return obj
+            pos = idx + 1
+        except Exception:
+            pos = idx + 1
 
     # Ponytail: Robust fallback for LLM finish actions where "answer" has unescaped raw newlines or quotes
     if '"action"' in text_clean and '"finish"' in text_clean and '"answer"' in text_clean:

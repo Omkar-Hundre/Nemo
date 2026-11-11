@@ -548,6 +548,20 @@ async def test_desktop_integration_toast_notification():
     assert res.data["title"] == "NEMO Test Suite"
 
 
+def test_extract_json_block_multi_concatenated_objects():
+    """Verify extract_json_block extracts first valid JSON block when LLM concatenates multiple objects."""
+    from nemo.agent.orchestrator import extract_json_block
+    concatenated = (
+        '{"thought": "inspecting first", "action": "tool_call", "tool": "inspect_project_environment", "arguments": {"path": "."}} '
+        '{"thought": "inspecting second", "action": "tool_call", "tool": "system_inspector", "arguments": {"action": "summary"}} '
+        '{"thought": "notifying user", "action": "tool_call", "tool": "desktop_integration", "arguments": {"action": "notify"}}'
+    )
+    parsed = extract_json_block(concatenated)
+    assert parsed is not None
+    assert parsed["tool"] == "inspect_project_environment"
+    assert parsed["action"] == "tool_call"
+
+
 # 6. Public exports
 __all__ = [
     "test_git_operations_status_clean_and_dirty",
