@@ -31,11 +31,13 @@ import httpx
 import pypdf
 import trafilatura
 try:
+    import win32api
     import win32con
     import win32gui
     import win32process
     from pywinauto import Desktop
 except ImportError:
+    win32api = None
     win32con = None
     win32gui = None
     win32process = None
@@ -3421,6 +3423,9 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                             "play_audio",
                             "play_music",
                             "open_in_paint",
+                            "paint_draw",
+                            "draw_shape",
+                            "draw_in_paint",
                             "record_audio",
                             "sound_recorder",
                             "terminal_layout",
@@ -3429,6 +3434,19 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                             "cancel_alarm",
                         ],
                         "description": "Desktop action to perform.",
+                    },
+                    "shape": {
+                        "type": "string",
+                        "enum": ["square", "rectangle", "circle", "triangle", "star"],
+                        "description": "Shape to draw in Microsoft Paint (for 'paint_draw').",
+                    },
+                    "size": {
+                        "type": "integer",
+                        "description": "Size in pixels of the shape to draw (default 240).",
+                    },
+                    "color": {
+                        "type": "string",
+                        "description": "Color to draw with (default 'black').",
                     },
                     "text": {"type": "string", "description": "Text to copy to clipboard (for 'clipboard_copy')."},
                     "title": {"type": "string", "description": "Title for notification or alarm."},
@@ -3862,6 +3880,127 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                     },
                 )
 
+            elif action in ("paint_draw", "draw_shape", "draw_in_paint"):
+                shape = str(arguments.get("shape") or "square").lower().strip()
+                size = int(arguments.get("size") or 240)
+                color = str(arguments.get("color") or "black").lower().strip()
+
+                # Ensure access to interactive desktop
+                try:
+                    user32 = ctypes.windll.user32
+                    h_desk = user32.OpenDesktopW("Default", 0, False, 0x10000000)
+                    if h_desk:
+                        user32.SetThreadDesktop(h_desk)
+                except Exception:
+                    pass
+
+                # 1. Find or launch Paint
+                paint_hwnd = None
+                if win32gui:
+                    def _find_paint(h, _):
+                        nonlocal paint_hwnd
+                        if win32gui.IsWindowVisible(h):
+                            cls = win32gui.GetClassName(h)
+                            txt = win32gui.GetWindowText(h)
+                            if "Paint" in txt or cls == "MSPaintApp":
+                                paint_hwnd = h
+                    win32gui.EnumWindows(_find_paint, None)
+
+                if not paint_hwnd:
+                    proc = subprocess.Popen(["mspaint.exe"])
+                    await asyncio.sleep(1.2)
+                    if win32gui:
+                        win32gui.EnumWindows(_find_paint, None)
+
+                if paint_hwnd and win32gui:
+                    try:
+                        win32gui.ShowWindow(paint_hwnd, win32con.SW_RESTORE)
+                        win32gui.SetForegroundWindow(paint_hwnd)
+                        await asyncio.sleep(0.3)
+                        rect = win32gui.GetWindowRect(paint_hwnd)
+                        w_left, w_top, w_right, w_bottom = rect
+                    except Exception:
+                        w_left, w_top = 100, 100
+                        w_right, w_bottom = 1200, 800
+                else:
+                    w_left, w_top = 100, 100
+                    w_right, w_bottom = 1200, 800
+
+                # Canvas center (Paint ribbon is ~180px high at the top)
+                cx = w_left + (w_right - w_left) // 2
+                cy = w_top + 200 + max(100, (w_bottom - w_top - 200) // 2)
+
+                # Generate shape path
+                points = []
+                if shape in ("square", "rect", "rectangle"):
+                    w = size
+                    h = size if shape == "square" else int(size * 0.65)
+                    half_w = w // 2
+                    half_h = h // 2
+                    points = [
+                        (cx - half_w, cy - half_h),
+                        (cx + half_w, cy - half_h),
+                        (cx + half_w, cy + half_h),
+                        (cx - half_w, cy + half_h),
+                        (cx - half_w, cy - half_h),
+                    ]
+                elif shape == "circle":
+                    import math
+                    r = size // 2
+                    for deg in range(0, 365, 10):
+                        rad = math.radians(deg)
+                        points.append((int(cx + r * math.cos(rad)), int(cy + r * math.sin(rad))))
+                elif shape == "triangle":
+                    h = size // 2
+                    points = [
+                        (cx, cy - h),
+                        (cx + h, cy + h),
+                        (cx - h, cy + h),
+                        (cx, cy - h),
+                    ]
+                elif shape == "star":
+                    import math
+                    r_outer = size // 2
+                    r_inner = r_outer // 2
+                    for i in range(11):
+                        angle = i * (math.pi / 5) - (math.pi / 2)
+                        r = r_outer if i % 2 == 0 else r_inner
+                        points.append((int(cx + r * math.cos(angle)), int(cy + r * math.sin(angle))))
+                else:
+                    points = [(cx - size // 2, cy), (cx + size // 2, cy)]
+
+                # Smoothly drag mouse across all edges with LEFTDOWN
+                if win32api:
+                    p0 = points[0]
+                    win32api.SetCursorPos(p0)
+                    await asyncio.sleep(0.08)
+                    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                    await asyncio.sleep(0.03)
+
+                    for i in range(len(points) - 1):
+                        x1, y1 = points[i]
+                        x2, y2 = points[i + 1]
+                        steps = 30
+                        for s in range(1, steps + 1):
+                            cur_x = int(x1 + (x2 - x1) * (s / steps))
+                            cur_y = int(y1 + (y2 - y1) * (s / steps))
+                            win32api.SetCursorPos((cur_x, cur_y))
+                            await asyncio.sleep(0.007)
+
+                    await asyncio.sleep(0.03)
+                    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "paint_draw",
+                        "shape": shape,
+                        "size": size,
+                        "center": (cx, cy),
+                        "note": f"Successfully drew a crisp {shape} in Microsoft Paint at canvas position ({cx}, {cy}).",
+                    },
+                )
+
             elif action in ("record_audio", "sound_recorder"):
                 duration = int(arguments.get("duration_seconds") or arguments.get("duration") or 10)
                 out_path = arguments.get("path") or arguments.get("output_path") or f"mic_recording_{duration}s.wav"
@@ -4224,6 +4363,8 @@ class WindowsGuiTool(BaseTool):
                             "clock_alarm",
                             "clock_stopwatch",
                             "analyze_screen",
+                            "paint_draw",
+                            "draw_shape",
                         ],
                         "description": "Desktop GUI action to perform.",
                     },
@@ -4508,6 +4649,10 @@ class WindowsGuiTool(BaseTool):
                     )
                 except Exception as viz_err:
                     return ToolResult(success=False, error=f"Screen vision analysis failed: {viz_err}")
+
+            elif action in ("paint_draw", "draw_shape", "draw_in_paint"):
+                dt = WindowsDesktopTool()
+                return await dt.execute({"action": "paint_draw", **arguments}, context)
 
             else:
                 return ToolResult(success=False, error=f"Unsupported gui action: '{action}'")

@@ -4,7 +4,7 @@
 import json
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, Callable
 
 # 2. Third-party imports
 # (None)
@@ -162,6 +162,7 @@ class AgentOrchestrator:
         project_id: str | None = None,
         conversation_id: str | None = None,
         max_iterations: int = 12,
+        on_step: Callable[[dict[str, Any]], Any] | None = None,
     ) -> AgentState:
         """Execute autonomous loop until goal is reached with verification gate and reflection."""
         cwd = str(Path(working_directory).resolve()) if working_directory else str(Path.cwd())
@@ -233,6 +234,8 @@ class AgentOrchestrator:
             if not action_data:
                 state.completed = True
                 state.final_answer = llm_res.content
+                if on_step:
+                    on_step({"type": "finish", "answer": state.final_answer})
                 break
 
             # Capture thought & hypothesis into deliberation history
@@ -242,6 +245,8 @@ class AgentOrchestrator:
                     "thought": action_data.get("thought", ""),
                     "hypothesis": action_data.get("hypothesis", ""),
                 })
+                if on_step and action_data.get("thought"):
+                    on_step({"type": "thought", "content": action_data["thought"]})
 
             action_type = action_data.get("action")
             if action_type == "finish":
@@ -279,6 +284,8 @@ class AgentOrchestrator:
                 state.verified = True
                 state.completed = True
                 state.final_answer = action_data.get("answer", "Task completed.")
+                if on_step:
+                    on_step({"type": "finish", "answer": state.final_answer})
                 break
 
             # Handle both {"action": "tool_call", "tool": "..."} and {"action": "<tool_name>"} or {"tool": "..."}
@@ -288,6 +295,8 @@ class AgentOrchestrator:
 
             if tool_name and self.tools.get_tool(tool_name):
                 tool_args = action_data.get("arguments", {})
+                if on_step:
+                    on_step({"type": "tool_start", "tool": tool_name, "arguments": tool_args})
 
                 # Track written / modified files
                 if tool_name == "write_file" and "path" in tool_args:
@@ -301,6 +310,15 @@ class AgentOrchestrator:
                     arguments=tool_args,
                     context={"working_directory": state.working_directory, "project_id": state.project_id},
                 )
+
+                if on_step:
+                    on_step({
+                        "type": "tool_end",
+                        "tool": tool_name,
+                        "success": tool_result.success,
+                        "data": tool_result.data,
+                        "error": tool_result.error,
+                    })
 
                 step_record = {
                     "iteration": state.iteration,

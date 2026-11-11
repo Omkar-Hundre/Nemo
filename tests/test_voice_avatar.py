@@ -1,4 +1,4 @@
-"""Unit tests for Voice Daemon, Local Whisper Engine, and Action Panel Pill."""
+"""Unit tests for Voice Daemon, Local Whisper Engine, SAPI TTS, and Paint Drawing."""
 
 # 1. Standard library imports
 import asyncio
@@ -8,11 +8,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 # 3. Local imports
+from nemo.tools.builtin import WindowsDesktopTool
 from nemo.voice.audio import AudioCaptureService
 from nemo.voice.autostart import is_autostart_enabled, set_autostart
 from nemo.voice.engine import WhisperVoiceEngine
 from nemo.voice.panel import ActionPanelPill
 from nemo.voice.queue import IdempotentTaskQueue, NemoTask
+from nemo.voice.tts import NemoTtsEngine
 
 
 class TestVoiceEngine:
@@ -85,7 +87,6 @@ class TestIdempotentTaskQueue:
 
 class TestAutostart:
     def test_autostart_toggle(self):
-        # Test enabling and disabling auto-start
         assert set_autostart(False) is True
         assert is_autostart_enabled() is False
 
@@ -104,7 +105,39 @@ class TestActionPanelPill:
         assert "listening" in pill.COLORS
         assert "working" in pill.COLORS
         assert "completed" in pill.COLORS
-
-        # Check pill properties
         assert pill.WIDTH == 280
         assert pill.HEIGHT == 46
+
+
+class TestTtsEngine:
+    def test_clean_for_speech(self):
+        raw = "```python\nprint('hello')\n```\nHere is your **solution** at [website](https://example.com)!"
+        cleaned = NemoTtsEngine._clean_for_speech(raw)
+        assert "```" not in cleaned
+        assert "**" not in cleaned
+        assert "solution" in cleaned
+        assert "https://" not in cleaned
+
+    def test_verbose_truncation(self):
+        verbose = "Sentence one. " * 30
+        cleaned = NemoTtsEngine._clean_for_speech(verbose)
+        assert len(cleaned) <= 300
+
+
+class TestPaintDrawTool:
+    @pytest.mark.asyncio
+    async def test_paint_draw_square(self):
+        tool = WindowsDesktopTool()
+        with patch("subprocess.Popen") as mock_popen, \
+             patch("win32gui.EnumWindows"), \
+             patch("win32api.SetCursorPos"), \
+             patch("win32api.mouse_event"):
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_popen.return_value = mock_proc
+
+            res = await tool.execute({"action": "paint_draw", "shape": "square", "size": 180}, {})
+            assert res.success is True
+            assert res.data["action"] == "paint_draw"
+            assert res.data["shape"] == "square"
+            assert "square" in res.data["note"]

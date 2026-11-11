@@ -135,3 +135,4 @@ class ActionPanelPill:
         if self.on_cancel:
             self.on_cancel()
         self.stop()
+

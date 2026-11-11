@@ -1107,8 +1107,9 @@ def voice_avatar_cmd(
     disable_autostart: bool = typer.Option(False, "--disable-autostart", help="Disable launch on Windows boot."),
     no_panel: bool = typer.Option(False, "--no-panel", help="Run in terminal without taskbar action pill."),
     no_mic: bool = typer.Option(False, "--no-mic", help="Run without microphone listener."),
+    no_tts: bool = typer.Option(False, "--no-tts", help="Disable speech synthesis (TTS)."),
 ) -> None:
-    """Launch Nemo hands-free voice assistant with taskbar action panel pill."""
+    """Launch Nemo hands-free voice assistant with SAPI TTS and taskbar action panel."""
     from nemo.voice.autostart import set_autostart, is_autostart_enabled
     from nemo.voice.service import NemoVoiceService
 
@@ -1124,6 +1125,7 @@ def voice_avatar_cmd(
     console.print(Panel(
         f"[bold cyan]Nemo Hands-Free Voice Assistant[/bold cyan]\n"
         f"• [bold]Whisper Engine:[/bold] Local {model} (INT8)\n"
+        f"• [bold]Speech Engine:[/bold] {'Windows SAPI (TTS)' if not no_tts else 'Disabled'}\n"
         f"• [bold]Wake Word:[/bold] 'Nemo' / 'Hey Nemo'\n"
         f"• [bold]Action Panel:[/bold] Minimal Taskbar Pill (Bottom-Right)\n"
         f"• [bold]Auto-Start:[/bold] {'[green]Enabled[/green]' if is_autostart_enabled() else '[dim]Disabled[/dim]'}\n\n"
@@ -1132,7 +1134,12 @@ def voice_avatar_cmd(
         border_style="cyan",
     ))
 
-    service = NemoVoiceService(model_size=model, enable_voice=not no_mic, show_panel=not no_panel)
+    service = NemoVoiceService(
+        model_size=model,
+        enable_voice=not no_mic,
+        enable_tts=not no_tts,
+        show_panel=not no_panel,
+    )
     try:
         service.start(block=True)
     except KeyboardInterrupt:

@@ -1,4 +1,4 @@
-"""Unified Voice Service and Taskbar Action Panel for Nemo."""
+"""Unified Voice Service, SAPI TTS Synthesizer, and Taskbar Action Panel for Nemo."""
 
 # 1. Standard library imports
 import asyncio
@@ -9,6 +9,8 @@ from typing import Any
 
 # 2. Third-party imports
 from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
 
 # 3. Local imports
 from nemo.voice.audio import AudioCaptureService
@@ -16,22 +18,25 @@ from nemo.voice.autostart import set_autostart
 from nemo.voice.engine import WhisperVoiceEngine
 from nemo.voice.panel import ActionPanelPill
 from nemo.voice.queue import IdempotentTaskQueue
+from nemo.voice.tts import NemoTtsEngine
 
 logger = logging.getLogger(__name__)
 console = Console()
 
 
 class NemoVoiceService:
-    """Production voice operating layer coordinating local Whisper, task queue, and taskbar pill."""
+    """Production voice operating layer with live thinking streaming, SAPI TTS, and taskbar pill."""
 
     def __init__(
         self,
         model_size: str = "base.en",
         enable_voice: bool = True,
+        enable_tts: bool = True,
         show_panel: bool = True,
         autostart: bool = False,
     ) -> None:
         self.enable_voice = enable_voice
+        self.enable_tts = enable_tts
         self.model_size = model_size
         self.show_panel = show_panel
 
@@ -46,14 +51,18 @@ class NemoVoiceService:
         self._wake_active_until = 0.0
         self.WAKE_WINDOW_SEC = 8.0
 
+        # Text-To-Speech Synthesizer
+        self.tts = NemoTtsEngine() if self.enable_tts else None
+
         # Action Panel Pill (bottom-right taskbar area)
         self.panel: ActionPanelPill | None = None
         if self.show_panel:
             self.panel = ActionPanelPill(on_cancel=self.stop)
 
-        # Priority Task Queue
+        # Priority Task Queue with step callbacks
         self.task_queue = IdempotentTaskQueue(
             on_state_change=self._on_queue_state_change,
+            on_step=self._on_agent_step,
         )
 
         # Local Whisper Engine & Audio Capture
@@ -84,6 +93,8 @@ class NemoVoiceService:
             self._speech_thread = threading.Thread(target=self._speech_worker_loop, daemon=True)
             self._speech_thread.start()
             console.print("[bold green]Voice Listener Online.[/bold green] Say [bold cyan]'Nemo'[/bold cyan] to issue commands.")
+            if self.tts:
+                self.tts.speak("Nemo voice assistant is active and listening.")
 
         # 4. Show minimal bottom-right Action Panel pill
         if self.panel:
@@ -98,6 +109,8 @@ class NemoVoiceService:
     def stop(self) -> None:
         """Terminate all background threads and close UI."""
         self._stop_event.set()
+        if self.tts:
+            self.tts.stop()
         if self.audio:
             self.audio.stop()
         self.task_queue.stop_worker()
@@ -148,23 +161,60 @@ class NemoVoiceService:
                         self.panel.update_status("listening", "Hearing command...")
 
                     if command:
-                        console.print(f"[bold green][VOICE TASK][/bold green] Executing: '{command}'")
+                        console.print(f"\n[bold green][VOICE TASK][/bold green] Executing: '[bold]{command}[/bold]'")
                         self._wake_active_until = 0.0
                         self.task_queue.submit_command(command)
                 elif is_currently_awake and text.strip():
-                    console.print(f"[bold green][VOICE TASK][/bold green] Follow-up command: '{text}'")
+                    console.print(f"\n[bold green][VOICE TASK][/bold green] Follow-up command: '[bold]{text}[/bold]'")
                     self._wake_active_until = 0.0
                     self.task_queue.submit_command(text)
 
             except Exception as e:
                 logger.error("Error transcribing speech chunk: %s", e)
 
+    def _on_agent_step(self, event: dict[str, Any]) -> None:
+        """Handle real-time step streaming, thoughts, and outcomes from AgentOrchestrator."""
+        etype = event.get("type")
+
+        if etype == "thought":
+            thought_text = event.get("content", "").strip()
+            if thought_text:
+                console.print(f"[dim italic]🤔 Thinking: {thought_text}[/dim italic]")
+
+        elif etype == "tool_start":
+            tool_name = event.get("tool", "")
+            args_str = str(event.get("arguments", {}))
+            console.print(f"[bold yellow]⚡ Action:[/bold yellow] [bold cyan]{tool_name}[/bold cyan] [dim]{args_str}[/dim]")
+            if self.panel:
+                self.panel.update_status("working", f"Tool: {tool_name}")
+
+        elif etype == "tool_end":
+            success = event.get("success", True)
+            icon = "[bold green]✓[/bold green]" if success else "[bold red]✗[/bold red]"
+            data = event.get("data")
+            err = event.get("error")
+            note = ""
+            if isinstance(data, dict) and "note" in data:
+                note = data["note"]
+            elif data:
+                note = str(data)[:90]
+            elif err:
+                note = str(err)[:90]
+            console.print(f" {icon} [dim]{note}[/dim]")
+
+        elif etype == "finish":
+            answer = event.get("answer", "Task complete.")
+            console.print(Panel(Markdown(answer), title="[bold cyan]💬 NEMO[/bold cyan]", border_style="cyan"))
+            if self.panel:
+                self.panel.update_status("completed", "Done ✓")
+            if self.tts:
+                self.tts.speak(answer)
+
     def _on_queue_state_change(self, state: str, message: str) -> None:
         """Relay task queue state updates to taskbar action pill and console."""
         pill_state = "idle"
         if state == "working":
             pill_state = "working"
-            console.print(f"[bold yellow]→ {message}[/bold yellow]")
         elif "Complete" in message:
             pill_state = "completed"
             console.print(f"[bold green]✓ {message}[/bold green]")

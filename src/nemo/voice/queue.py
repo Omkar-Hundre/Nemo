@@ -48,9 +48,11 @@ class IdempotentTaskQueue:
         self,
         on_state_change: Callable[[str, str], Any] | None = None,
         on_tasks_updated: Callable[[list[dict[str, Any]]], Any] | None = None,
+        on_step: Callable[[dict[str, Any]], Any] | None = None,
     ) -> None:
         self.on_state_change = on_state_change
         self.on_tasks_updated = on_tasks_updated
+        self.on_step = on_step
 
         self.tasks: list[NemoTask] = []
         self._recent_commands: dict[str, float] = {}
@@ -160,7 +162,7 @@ class IdempotentTaskQueue:
                 self._current_future = asyncio.current_task()
 
                 try:
-                    state = await orchestrator.run(objective=task.name)
+                    state = await orchestrator.run(objective=task.name, on_step=self.on_step)
                     task.status = "completed"
                     task.result = state.final_answer or "Success"
                     task.completed_at = time.time()
