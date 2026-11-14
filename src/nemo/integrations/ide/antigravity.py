@@ -25,10 +25,15 @@ class AntigravityAdapter(IDEAdapter):
         if exe:
             return Path(exe)
 
-        # Standard Windows installation path
-        default_path = Path.home() / "AppData" / "Local" / "Programs" / "Antigravity" / "Antigravity.exe"
-        if default_path.exists():
-            return default_path
+        # Standard Windows installation paths
+        candidates = [
+            Path.home() / "AppData" / "Local" / "Programs" / "Antigravity IDE" / "Antigravity IDE.exe",
+            Path.home() / "AppData" / "Local" / "Programs" / "antigravity" / "Antigravity.exe",
+            Path.home() / "AppData" / "Local" / "Programs" / "Antigravity" / "Antigravity.exe",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
         return None
 
     async def detect(self) -> bool:

@@ -59,6 +59,7 @@ except ImportError:
 # 3. Local / internal imports
 from nemo.ai.embeddings import NvidiaEmbeddingProvider, cosine_similarity
 from nemo.common.types import RiskLevel, ToolResult
+from nemo.execution.journal import OperationJournal
 from nemo.execution.sessions.manager import SessionManager
 from nemo.execution.shells.native import NativeSubprocessExecutor
 from nemo.integrations.ide.registry import IDERegistry
@@ -370,8 +371,20 @@ class CreateFolderTool(BaseTool):
         if not self.policy.is_path_safe(target, base_dir=base_dir):
             return ToolResult(success=False, error=f"Access denied: path outside allowed boundary ({target})")
 
+        existed_before = target.exists()
         try:
             target.mkdir(parents=True, exist_ok=True)
+            if not existed_before:
+                try:
+                    OperationJournal().record_action(
+                        action="create_folder",
+                        forward_data={"path": str(target)},
+                        rollback_data={"path": str(target)},
+                        description=f"Created folder {target.name}",
+                        task_id=context.get("task_id"),
+                    )
+                except Exception:
+                    pass
             return ToolResult(success=True, data={"path": str(target), "created": True, "is_directory": target.is_dir()})
         except Exception as exc:
             return ToolResult(success=False, error=f"Folder creation error: {exc}")
@@ -458,6 +471,16 @@ class FileOperationsTool(BaseTool):
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copytree(src, dst, dirs_exist_ok=True)
                     item_count = sum(len(files) for _, _, files in os.walk(dst))
+                    try:
+                        OperationJournal().record_action(
+                            action="copy",
+                            forward_data={"src": str(src), "dst": str(dst)},
+                            rollback_data={"dst": str(dst)},
+                            description=f"Copied directory {src.name} to {dst.name}",
+                            task_id=context.get("task_id"),
+                        )
+                    except Exception:
+                        pass
                     return ToolResult(success=True, data={
                         "action": "copy",
                         "type": "directory",
@@ -474,6 +497,16 @@ class FileOperationsTool(BaseTool):
                         dst.parent.mkdir(parents=True, exist_ok=True)
                         final_dst = dst
                     shutil.copy2(src, final_dst)
+                    try:
+                        OperationJournal().record_action(
+                            action="copy",
+                            forward_data={"src": str(src), "dst": str(final_dst)},
+                            rollback_data={"dst": str(final_dst)},
+                            description=f"Copied file {src.name} to {final_dst.name}",
+                            task_id=context.get("task_id"),
+                        )
+                    except Exception:
+                        pass
                     return ToolResult(success=True, data={
                         "action": "copy",
                         "type": "file",
@@ -483,6 +516,20 @@ class FileOperationsTool(BaseTool):
                         "note": f"File copied to {final_dst}",
                     })
             except Exception as e:
+                # Self-healing: if target is locked or permission error, try timestamped fallback
+                try:
+                    fallback_dst = dst.parent / f"{dst.stem}_recovered_{int(time.time())}{dst.suffix}"
+                    if not src.is_dir():
+                        shutil.copy2(src, fallback_dst)
+                        return ToolResult(success=True, data={
+                            "action": "copy",
+                            "recovered": True,
+                            "src": str(src),
+                            "dst": str(fallback_dst),
+                            "note": f"Recovered from copy failure by writing to fallback path: {fallback_dst}",
+                        })
+                except Exception:
+                    pass
                 return ToolResult(success=False, error=f"Copy failed: {e}")
 
         elif action == "move":
@@ -503,6 +550,16 @@ class FileOperationsTool(BaseTool):
             try:
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 moved_to = shutil.move(str(src), str(dst))
+                try:
+                    OperationJournal().record_action(
+                        action="move",
+                        forward_data={"src": str(src), "dst": str(moved_to)},
+                        rollback_data={"original_src": str(src), "dst": str(moved_to)},
+                        description=f"Moved {src.name} to {moved_to}",
+                        task_id=context.get("task_id"),
+                    )
+                except Exception:
+                    pass
                 return ToolResult(success=True, data={
                     "action": "move",
                     "src": str(src),
@@ -551,6 +608,18 @@ class FileOperationsTool(BaseTool):
                 except Exception as ex:
                     errors.append(f"{s_path.name}: {ex}")
 
+            if transferred:
+                try:
+                    OperationJournal().record_action(
+                        action="batch_transfer",
+                        forward_data={"sources": sources, "target_dir": str(target_dir)},
+                        rollback_data={"transferred_files": transferred, "target_directory": str(target_dir)},
+                        description=f"Batch transferred {len(transferred)} file(s) to {target_dir.name}",
+                        task_id=context.get("task_id"),
+                    )
+                except Exception:
+                    pass
+
             return ToolResult(success=len(transferred) > 0, data={
                 "action": "batch_transfer",
                 "operation": op,
@@ -589,6 +658,17 @@ class FileOperationsTool(BaseTool):
                     else:
                         zf.write(src, src.name)
                         file_count = 1
+
+                try:
+                    OperationJournal().record_action(
+                        action="zip",
+                        forward_data={"src": str(src), "dst": str(dst)},
+                        rollback_data={"archive": str(dst)},
+                        description=f"Created zip archive {dst.name}",
+                        task_id=context.get("task_id"),
+                    )
+                except Exception:
+                    pass
 
                 return ToolResult(success=True, data={
                     "action": "zip",
@@ -674,8 +754,24 @@ class WriteFileTool(BaseTool):
             content = content.replace("`r`n", "\n").replace("`n", "\n").replace('`"', '"').replace("`t", "\t").replace("`r", "")
 
         try:
+            existed_before = target.exists()
+            prev_content = target.read_text(encoding="utf-8") if existed_before else None
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
+            try:
+                OperationJournal().record_action(
+                    action="write_file",
+                    forward_data={"path": str(target), "bytes": len(content.encode("utf-8"))},
+                    rollback_data={
+                        "path": str(target),
+                        "was_created": not existed_before,
+                        "previous_content": prev_content,
+                    },
+                    description=f"Wrote file {target.name}",
+                    task_id=context.get("task_id"),
+                )
+            except Exception:
+                pass
             return ToolResult(success=True, data={"path": str(target), "bytes_written": len(content.encode("utf-8"))})
         except Exception as exc:
             return ToolResult(success=False, error=f"Write error: {exc}")
@@ -5664,6 +5760,194 @@ class WindowsGuiTool(BaseTool):
             return ToolResult(success=False, error=f"GUI automation error: {exc}")
 
 
+
+class UndoTool(BaseTool):
+    """Roll back recent reversible filesystem operations using the atomic operation journal."""
+    name = "undo"
+    description = (
+        "Roll back recent mutating file operations (file creation/edit, folder creation, "
+        "copy, move, batch transfer, zip) in LIFO order using the operation journal."
+    )
+    risk_level = RiskLevel.L1
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "count": {
+                        "type": "integer",
+                        "description": "Number of recent operations to undo (default 1).",
+                    },
+                },
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        count = int(arguments.get("count", 1))
+        journal = OperationJournal()
+        res = journal.undo_last(count=count)
+        return ToolResult(
+            success=res.get("success", False),
+            data=res,
+            error=None if res.get("success") else res.get("message", "Undo failed"),
+        )
+
+
+class ProductiveModeTool(BaseTool):
+    """Launches Brave with YouTube Music, opens Antigravity IDE, and generates a developer status briefing."""
+    name = "productive_mode"
+    description = (
+        "Initiate productive developer workflow: launches Brave Browser with YouTube Music, "
+        "opens Antigravity IDE at the target project, and provides an audio and visual status briefing "
+        "of recent work and next steps."
+    )
+    risk_level = RiskLevel.L1
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "project_path": {
+                        "type": "string",
+                        "description": "Workspace directory to open in Antigravity IDE (defaults to current project).",
+                    },
+                    "music_url": {
+                        "type": "string",
+                        "description": "Music stream URL (default 'https://music.youtube.com').",
+                    },
+                    "speak_briefing": {
+                        "type": "boolean",
+                        "description": "Whether to announce the briefing via voice TTS (default True).",
+                    },
+                },
+            },
+            risk_level=self.risk_level,
+        )
+
+    def _find_brave(self) -> Path | None:
+        which_path = shutil.which("brave.exe") or shutil.which("brave")
+        if which_path:
+            return Path(which_path)
+        candidates = [
+            Path("C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe"),
+            Path("C:/Program Files (x86)/BraveSoftware/Brave-Browser/Application/brave.exe"),
+            Path.home() / "AppData/Local/BraveSoftware/Brave-Browser/Application/brave.exe",
+        ]
+        for c in candidates:
+            if c.exists():
+                return c
+        return None
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+        proj_arg = arguments.get("project_path")
+        project_dir = Path(proj_arg).resolve() if proj_arg else base_dir
+        music_url = arguments.get("music_url", "https://music.youtube.com")
+        speak = bool(arguments.get("speak_briefing", True))
+
+        # 1. Launch Brave Browser to YouTube Music
+        brave_launched = False
+        brave_exe = self._find_brave()
+        if brave_exe:
+            try:
+                subprocess.Popen([str(brave_exe), music_url])
+                brave_launched = True
+            except Exception:
+                pass
+        if not brave_launched:
+            try:
+                webbrowser.open(music_url)
+                brave_launched = True
+            except Exception:
+                pass
+
+        # 2. Launch Antigravity IDE with target workspace
+        ide_opened = False
+        try:
+            ide_registry = IDERegistry()
+            ide_opened = await ide_registry.open_project(project_dir, preferred_ide="antigravity")
+        except Exception:
+            pass
+
+        # 3. Compile project status briefing
+        recent_commits: list[str] = []
+        git_status_lines: list[str] = []
+        try:
+            log_proc = await asyncio.create_subprocess_exec(
+                "git", "log", "-n", "3", "--oneline",
+                cwd=str(project_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out, _ = await log_proc.communicate()
+            if out:
+                recent_commits = [line.strip() for line in out.decode("utf-8", errors="replace").splitlines() if line.strip()]
+        except Exception:
+            pass
+
+        try:
+            status_proc = await asyncio.create_subprocess_exec(
+                "git", "status", "--short",
+                cwd=str(project_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out, _ = await status_proc.communicate()
+            if out:
+                git_status_lines = [line.strip() for line in out.decode("utf-8", errors="replace").splitlines() if line.strip()]
+        except Exception:
+            pass
+
+        recent_ops: list[str] = []
+        try:
+            journal_entries = OperationJournal().list_entries(limit=3)
+            recent_ops = [f"{e.action}: {e.description or Path(e.forward_data.get('path', '')).name}" for e in journal_entries]
+        except Exception:
+            pass
+
+        briefing_parts = [
+            f"Productive mode active. Workspace loaded: {project_dir.name}."
+        ]
+        if recent_commits:
+            briefing_parts.append(f"Recent commits: {'; '.join(recent_commits[:2])}.")
+        if recent_ops:
+            briefing_parts.append(f"Recent operations: {'; '.join(recent_ops[:2])}.")
+        if git_status_lines:
+            briefing_parts.append(f"Active uncommitted changes: {len(git_status_lines)} modified file(s).")
+        else:
+            briefing_parts.append("Workspace working tree is clean.")
+
+        briefing_text = " ".join(briefing_parts)
+
+        # 4. Optional TTS announcement
+        if speak:
+            try:
+                from nemo.voice.tts import NemoTtsEngine
+                tts = NemoTtsEngine()
+                tts.speak(briefing_text)
+            except Exception:
+                pass
+
+        return ToolResult(
+            success=True,
+            data={
+                "youtube_music_opened": brave_launched,
+                "antigravity_opened": ide_opened,
+                "project_path": str(project_dir),
+                "briefing": briefing_text,
+                "recent_commits": recent_commits,
+                "active_changes_count": len(git_status_lines),
+            },
+        )
+
+
 # 6. Public exports
 __all__ = [
     "CodebaseSummaryTool",
@@ -5675,6 +5959,8 @@ __all__ = [
     "CreateFolderTool",
     "FileOperationsTool",
     "WriteFileTool",
+    "UndoTool",
+    "ProductiveModeTool",
     "ListDirectoryTool",
     "MemoryRecallTool",
     "IDEOpenTool",

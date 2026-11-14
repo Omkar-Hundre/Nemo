@@ -157,17 +157,35 @@ class IdempotentTaskQueue:
                     display_title = task.name if len(task.name) <= 24 else task.name[:21] + "..."
                     self.on_state_change("working", f"Executing: {display_title}")
 
-                # Execute task via AgentOrchestrator
-                orchestrator = AgentOrchestrator()
-                self._current_future = asyncio.current_task()
-
                 try:
-                    state = await orchestrator.run(objective=task.name, on_step=self.on_step)
-                    task.status = "completed"
-                    task.result = state.final_answer or "Success"
-                    task.completed_at = time.time()
-                    if self.on_state_change:
-                        self.on_state_change("sleeping", "Task Complete ✓")
+                    cmd_lower = task.name.strip().lower().rstrip(".!?,")
+                    if cmd_lower in ("undo", "undo that", "revert", "revert that", "rollback"):
+                        from nemo.execution.journal import OperationJournal
+                        res = OperationJournal().undo_last(1)
+                        task.status = "completed" if res.get("success") else "failed"
+                        task.result = res.get("message", "Undo complete.")
+                        task.completed_at = time.time()
+                        if self.on_state_change:
+                            self.on_state_change("sleeping", f"Undo: {task.result}")
+                    elif cmd_lower in ("productive mode", "start productive mode", "focus mode", "developer mode"):
+                        from nemo.tools.builtin import ProductiveModeTool
+                        tool = ProductiveModeTool()
+                        res = await tool.execute({}, context={})
+                        task.status = "completed" if res.success else "failed"
+                        task.result = (res.data or {}).get("briefing", "Productive mode active.")
+                        task.completed_at = time.time()
+                        if self.on_state_change:
+                            self.on_state_change("sleeping", "Productive Mode ✓")
+                    else:
+                        # Execute task via AgentOrchestrator
+                        orchestrator = AgentOrchestrator()
+                        self._current_future = asyncio.current_task()
+                        state = await orchestrator.run(objective=task.name, on_step=self.on_step)
+                        task.status = "completed"
+                        task.result = state.final_answer or "Success"
+                        task.completed_at = time.time()
+                        if self.on_state_change:
+                            self.on_state_change("sleeping", "Task Complete ✓")
                 except asyncio.CancelledError:
                     task.status = "cancelled"
                     if self.on_state_change:

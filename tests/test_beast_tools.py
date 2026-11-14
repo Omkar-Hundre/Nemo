@@ -9,6 +9,7 @@ Covers:
 """
 
 # 1. Standard library imports
+import asyncio
 import os
 from pathlib import Path
 import sqlite3
@@ -735,6 +736,94 @@ async def test_file_operations_copy_move_and_batch(tmp_path):
     assert (unzip_dir / "target_folder" / "code1.py").exists() or (unzip_dir / "code1.py").exists()
 
 
+@pytest.mark.asyncio
+async def test_operation_journal_and_undo_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify LIFO rollback of file creations, modifications, and folder creations."""
+    from nemo.execution.journal import OperationJournal
+    from nemo.tools.builtin import CreateFolderTool, UndoTool, WriteFileTool
+
+    test_journal_dir = tmp_path / "nemo_journal"
+    test_trash_dir = tmp_path / "nemo_trash"
+
+    def _mock_init(self, journal_dir=None):
+        self.journal_dir = test_journal_dir
+        self.trash_dir = test_trash_dir
+        self._ensure_dirs()
+
+    monkeypatch.setattr(OperationJournal, "__init__", _mock_init)
+
+    policy = SecurityPolicy()
+    write_tool = WriteFileTool(policy=policy)
+    create_folder_tool = CreateFolderTool(policy=policy)
+    undo_tool = UndoTool()
+
+    # 1. Create a file
+    target_file = tmp_path / "created.txt"
+    res_write = await write_tool.execute(
+        {"path": str(target_file), "content": "hello world"},
+        {"working_directory": str(tmp_path)},
+    )
+    assert res_write.success is True
+    assert target_file.exists()
+
+    # 2. Modify the file
+    res_mod = await write_tool.execute(
+        {"path": str(target_file), "content": "updated content"},
+        {"working_directory": str(tmp_path)},
+    )
+    assert res_mod.success is True
+    assert target_file.read_text(encoding="utf-8") == "updated content"
+
+    # 3. Create a directory
+    subfolder = tmp_path / "sub_dir"
+    res_folder = await create_folder_tool.execute(
+        {"path": str(subfolder)},
+        {"working_directory": str(tmp_path)},
+    )
+    assert res_folder.success is True
+    assert subfolder.exists()
+
+    # 4. Undo step 1: Revert folder creation
+    res_undo_1 = await undo_tool.execute({"count": 1}, {"working_directory": str(tmp_path)})
+    assert res_undo_1.success is True
+    assert not subfolder.exists()
+
+    # 5. Undo step 2: Revert modification back to "hello world"
+    res_undo_2 = await undo_tool.execute({"count": 1}, {"working_directory": str(tmp_path)})
+    assert res_undo_2.success is True
+    assert target_file.read_text(encoding="utf-8") == "hello world"
+
+    # 6. Undo step 3: Revert file creation
+    res_undo_3 = await undo_tool.execute({"count": 1}, {"working_directory": str(tmp_path)})
+    assert res_undo_3.success is True
+    assert not target_file.exists()
+
+
+@pytest.mark.asyncio
+async def test_productive_mode_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify ProductiveModeTool launches Brave, Antigravity IDE, and generates status briefing."""
+    from nemo.tools.builtin import ProductiveModeTool
+
+    tool = ProductiveModeTool()
+
+    monkeypatch.setattr(tool, "_find_brave", lambda: Path("C:/Mock/brave.exe"))
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: None)
+
+    async def _mock_open_project(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr("nemo.integrations.ide.registry.IDERegistry.open_project", _mock_open_project)
+
+    res = await tool.execute(
+        {"project_path": str(tmp_path), "speak_briefing": False},
+        {"working_directory": str(tmp_path)},
+    )
+    assert res.success is True
+    assert res.data["youtube_music_opened"] is True
+    assert res.data["antigravity_opened"] is True
+    assert "Productive mode active" in res.data["briefing"]
+
+
 # 6. Public exports
 __all__ = [
     "test_git_operations_status_clean_and_dirty",
@@ -757,4 +846,7 @@ __all__ = [
     "test_system_inspector_protected_process_kill_safety",
     "test_desktop_integration_clipboard_copy_and_read",
     "test_desktop_integration_toast_notification",
+    "test_file_operations_copy_move_and_batch",
+    "test_operation_journal_and_undo_tool",
+    "test_productive_mode_tool",
 ]

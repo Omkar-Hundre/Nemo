@@ -35,6 +35,7 @@ from nemo.tools.builtin import (
     OpenBrowserTool,
     PortManagerTool,
     PresentationGeneratorTool,
+    ProductiveModeTool,
     ProjectEnvironmentTool,
     ReadFileTool,
     ScaffoldProjectTool,
@@ -42,6 +43,7 @@ from nemo.tools.builtin import (
     SymbolLookupTool,
     SystemInspectorTool,
     TerminalTool,
+    UndoTool,
     WebResearcherTool,
     WindowsDesktopTool,
     WindowsGuiTool,
@@ -78,6 +80,8 @@ class ToolRegistry:
         self.register(CreateFolderTool(policy=self.policy))
         self.register(FileOperationsTool(policy=self.policy))
         self.register(WriteFileTool(policy=self.policy))
+        self.register(UndoTool())
+        self.register(ProductiveModeTool())
         self.register(ListDirectoryTool())
         self.register(FindFilesTool())
         self.register(GitDiffTool())

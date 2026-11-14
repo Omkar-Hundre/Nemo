@@ -1236,6 +1236,60 @@ def avatar_cmd(
     voice_avatar_cmd(model=model, no_mic=no_mic)
 
 
+@app.command("undo")
+def undo_cmd(
+    count: int = typer.Argument(1, help="Number of operations to revert (default 1)."),
+) -> None:
+    """Revert recent mutating operations recorded in the transactional journal."""
+    from nemo.execution.journal import OperationJournal
+
+    journal = OperationJournal()
+    result = journal.undo_last(count=count)
+    if result.get("success"):
+        console.print(f"[bold green]✓ Reverted {result.get('reverted_count', 0)} operation(s):[/bold green]")
+        for action in result.get("reverted_actions", []):
+            console.print(f"  [cyan]•[/cyan] {action}")
+    else:
+        msg = result.get("message", "No operations reverted.")
+        console.print(f"[yellow]{msg}[/yellow]")
+        if result.get("errors"):
+            for err in result["errors"]:
+                console.print(f"  [red]• {err}[/red]")
+
+
+@app.command("productive")
+def productive_cmd(
+    project: str | None = typer.Option(None, "--project", "-p", help="Target project directory path."),
+    no_speak: bool = typer.Option(False, "--no-speak", help="Disable voice TTS briefing."),
+    music_url: str = typer.Option("https://music.youtube.com", "--music", help="Music URL to stream in Brave."),
+) -> None:
+    """Launch productive developer workflow (Brave YouTube Music, Antigravity IDE & briefing)."""
+    from nemo.tools.builtin import ProductiveModeTool
+
+    tool = ProductiveModeTool()
+    console.print("[bold cyan]🚀 Initiating Nemo Productive Mode...[/bold cyan]")
+    res = asyncio.run(tool.execute({
+        "project_path": project,
+        "music_url": music_url,
+        "speak_briefing": not no_speak,
+    }, context={"working_directory": Path.cwd()}))
+
+    if res.success:
+        data = res.data or {}
+        briefing = data.get("briefing", "")
+        console.print(Panel(
+            f"[bold green]Productive Environment Ready[/bold green]\n\n"
+            f"• [bold]YouTube Music (Brave):[/bold] {'[green]Active[/green]' if data.get('youtube_music_opened') else '[dim]Failed[/dim]'}\n"
+            f"• [bold]Antigravity IDE:[/bold] {'[green]Active[/green]' if data.get('antigravity_opened') else '[dim]Fallback[/dim]'}\n"
+            f"• [bold]Project Workspace:[/bold] [cyan]{data.get('project_path')}[/cyan]\n\n"
+            f"[bold]Briefing:[/bold]\n{briefing}",
+            title="[bold blue]Nemo Productive Mode[/bold blue]",
+            border_style="cyan",
+        ))
+    else:
+        console.print(f"[bold red]Failed to start productive mode:[/bold red] {res.error}")
+
+
 # 6. Public exports
 __all__ = ["app", "main"]
 
@@ -1245,7 +1299,7 @@ def main() -> None:
     known_commands = {
         "chat", "setup", "version", "status", "doctor", "run", "daemon",
         "sessions", "memory", "project", "index", "ide", "worker", "task",
-        "history", "resume", "voice", "avatar",
+        "history", "resume", "voice", "avatar", "undo", "productive",
         "dependencies", "verify", "diagnose", "ask", "remember",
         "--help", "-h", "--version", "-v",
     }
