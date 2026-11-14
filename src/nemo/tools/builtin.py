@@ -24,6 +24,7 @@ import time
 from typing import Any
 from urllib.parse import quote
 import webbrowser
+import zipfile
 
 # 2. Third-party imports
 from ddgs import DDGS
@@ -374,6 +375,260 @@ class CreateFolderTool(BaseTool):
             return ToolResult(success=True, data={"path": str(target), "created": True, "is_directory": target.is_dir()})
         except Exception as exc:
             return ToolResult(success=False, error=f"Folder creation error: {exc}")
+
+
+class FileOperationsTool(BaseTool):
+    """High-speed native file and directory operations: copy, move, batch_transfer, zip, unzip."""
+    name = "file_operations"
+    description = (
+        "High-speed native file system operations across drives: copy files/directories, move files/directories, "
+        "batch transfer files matching a pattern/list into a folder, create zip archives, and unzip archives."
+    )
+    risk_level = RiskLevel.L1
+
+    def __init__(self, policy: SecurityPolicy | None = None) -> None:
+        self.policy = policy or SecurityPolicy()
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["copy", "move", "batch_transfer", "zip", "unzip"],
+                        "description": "Action to perform: 'copy', 'move', 'batch_transfer', 'zip', 'unzip'.",
+                    },
+                    "src": {
+                        "type": "string",
+                        "description": "Source file or directory path (for copy, move, zip, unzip).",
+                    },
+                    "dst": {
+                        "type": "string",
+                        "description": "Destination file or directory path (for copy, move, zip, unzip).",
+                    },
+                    "sources": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of source file paths for 'batch_transfer'.",
+                    },
+                    "target_dir": {
+                        "type": "string",
+                        "description": "Destination directory path for 'batch_transfer'.",
+                    },
+                    "operation": {
+                        "type": "string",
+                        "enum": ["copy", "move"],
+                        "description": "Operation type for 'batch_transfer' (default 'copy').",
+                    },
+                },
+                "required": ["action"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    def _resolve_path(self, raw: str, base_dir: Path) -> Path:
+        p_str = str(raw).replace("$env:USERPROFILE", str(Path.home())).replace("~", str(Path.home()))
+        p = Path(p_str)
+        return (base_dir / p).resolve() if not p.is_absolute() else p.resolve()
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        action = arguments.get("action", "").lower().strip()
+        base_dir = Path(context.get("working_directory", Path.cwd()))
+
+        if action == "copy":
+            src_raw = arguments.get("src")
+            dst_raw = arguments.get("dst")
+            if not src_raw or not dst_raw:
+                return ToolResult(success=False, error="Both 'src' and 'dst' are required for copy.")
+
+            src = self._resolve_path(src_raw, base_dir)
+            dst = self._resolve_path(dst_raw, base_dir)
+
+            if not src.exists():
+                return ToolResult(success=False, error=f"Source path does not exist: {src}")
+
+            if not self.policy.is_path_safe(src, base_dir) or not self.policy.is_path_safe(dst, base_dir):
+                return ToolResult(success=False, error=f"Access denied by security policy for {src} -> {dst}")
+
+            try:
+                if src.is_dir():
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copytree(src, dst, dirs_exist_ok=True)
+                    item_count = sum(len(files) for _, _, files in os.walk(dst))
+                    return ToolResult(success=True, data={
+                        "action": "copy",
+                        "type": "directory",
+                        "src": str(src),
+                        "dst": str(dst),
+                        "files_copied": item_count,
+                        "note": f"Directory copied to {dst} ({item_count} files)",
+                    })
+                else:
+                    if dst.is_dir() or dst_raw.endswith(("/", "\\")):
+                        dst.mkdir(parents=True, exist_ok=True)
+                        final_dst = dst / src.name
+                    else:
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        final_dst = dst
+                    shutil.copy2(src, final_dst)
+                    return ToolResult(success=True, data={
+                        "action": "copy",
+                        "type": "file",
+                        "src": str(src),
+                        "dst": str(final_dst),
+                        "bytes": final_dst.stat().st_size,
+                        "note": f"File copied to {final_dst}",
+                    })
+            except Exception as e:
+                return ToolResult(success=False, error=f"Copy failed: {e}")
+
+        elif action == "move":
+            src_raw = arguments.get("src")
+            dst_raw = arguments.get("dst")
+            if not src_raw or not dst_raw:
+                return ToolResult(success=False, error="Both 'src' and 'dst' are required for move.")
+
+            src = self._resolve_path(src_raw, base_dir)
+            dst = self._resolve_path(dst_raw, base_dir)
+
+            if not src.exists():
+                return ToolResult(success=False, error=f"Source path does not exist: {src}")
+
+            if not self.policy.is_path_safe(src, base_dir) or not self.policy.is_path_safe(dst, base_dir):
+                return ToolResult(success=False, error=f"Access denied by security policy for {src} -> {dst}")
+
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                moved_to = shutil.move(str(src), str(dst))
+                return ToolResult(success=True, data={
+                    "action": "move",
+                    "src": str(src),
+                    "dst": str(moved_to),
+                    "note": f"Successfully moved {src} to {moved_to}",
+                })
+            except Exception as e:
+                return ToolResult(success=False, error=f"Move failed: {e}")
+
+        elif action == "batch_transfer":
+            sources = arguments.get("sources", [])
+            target_dir_raw = arguments.get("target_dir")
+            op = arguments.get("operation", "copy").lower().strip()
+            if not sources or not target_dir_raw:
+                return ToolResult(success=False, error="'sources' list and 'target_dir' are required for batch_transfer.")
+
+            target_dir = self._resolve_path(target_dir_raw, base_dir)
+            if not self.policy.is_path_safe(target_dir, base_dir):
+                return ToolResult(success=False, error=f"Access denied for target_dir: {target_dir}")
+
+            target_dir.mkdir(parents=True, exist_ok=True)
+            transferred: list[str] = []
+            errors: list[str] = []
+            total_bytes = 0
+
+            for s_raw in sources:
+                s_path = self._resolve_path(s_raw, base_dir)
+                if not s_path.exists():
+                    errors.append(f"Not found: {s_path}")
+                    continue
+                if not self.policy.is_path_safe(s_path, base_dir):
+                    errors.append(f"Security blocked: {s_path}")
+                    continue
+
+                try:
+                    dest_file = target_dir / s_path.name
+                    if op == "move":
+                        shutil.move(str(s_path), str(dest_file))
+                    else:
+                        if s_path.is_dir():
+                            shutil.copytree(s_path, dest_file, dirs_exist_ok=True)
+                        else:
+                            shutil.copy2(s_path, dest_file)
+                            total_bytes += dest_file.stat().st_size
+                    transferred.append(str(dest_file))
+                except Exception as ex:
+                    errors.append(f"{s_path.name}: {ex}")
+
+            return ToolResult(success=len(transferred) > 0, data={
+                "action": "batch_transfer",
+                "operation": op,
+                "target_directory": str(target_dir),
+                "transferred_count": len(transferred),
+                "files": transferred,
+                "total_bytes": total_bytes,
+                "errors": errors if errors else None,
+                "note": f"Transferred {len(transferred)} files to {target_dir}",
+            }, error="; ".join(errors) if not transferred and errors else None)
+
+        elif action == "zip":
+            src_raw = arguments.get("src")
+            dst_raw = arguments.get("dst")
+            if not src_raw or not dst_raw:
+                return ToolResult(success=False, error="Both 'src' and 'dst' are required for zip.")
+
+            src = self._resolve_path(src_raw, base_dir)
+            dst = self._resolve_path(dst_raw, base_dir)
+            if not src.exists():
+                return ToolResult(success=False, error=f"Source path does not exist: {src}")
+            if not self.policy.is_path_safe(src, base_dir) or not self.policy.is_path_safe(dst, base_dir):
+                return ToolResult(success=False, error="Access denied by security policy.")
+
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                file_count = 0
+                with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zf:
+                    if src.is_dir():
+                        for root, _, files in os.walk(src):
+                            for f in files:
+                                f_path = Path(root) / f
+                                arcname = f_path.relative_to(src.parent)
+                                zf.write(f_path, arcname)
+                                file_count += 1
+                    else:
+                        zf.write(src, src.name)
+                        file_count = 1
+
+                return ToolResult(success=True, data={
+                    "action": "zip",
+                    "archive": str(dst),
+                    "files_compressed": file_count,
+                    "size_bytes": dst.stat().st_size,
+                    "note": f"Created zip archive {dst} ({file_count} files, {dst.stat().st_size} bytes)",
+                })
+            except Exception as e:
+                return ToolResult(success=False, error=f"Zip failed: {e}")
+
+        elif action == "unzip":
+            src_raw = arguments.get("src")
+            dst_raw = arguments.get("dst")
+            if not src_raw or not dst_raw:
+                return ToolResult(success=False, error="Both 'src' and 'dst' are required for unzip.")
+
+            src = self._resolve_path(src_raw, base_dir)
+            dst = self._resolve_path(dst_raw, base_dir)
+            if not src.exists():
+                return ToolResult(success=False, error=f"Archive not found: {src}")
+            if not self.policy.is_path_safe(src, base_dir) or not self.policy.is_path_safe(dst, base_dir):
+                return ToolResult(success=False, error="Access denied by security policy.")
+
+            try:
+                dst.mkdir(parents=True, exist_ok=True)
+                with zipfile.ZipFile(src, "r") as zf:
+                    zf.extractall(dst)
+                    names = zf.namelist()
+                return ToolResult(success=True, data={
+                    "action": "unzip",
+                    "archive": str(src),
+                    "extracted_to": str(dst),
+                    "files_extracted": len(names),
+                    "note": f"Extracted {len(names)} files to {dst}",
+                })
+            except Exception as e:
+                return ToolResult(success=False, error=f"Unzip failed: {e}")
+
+        return ToolResult(success=False, error=f"Unknown file action: '{action}'. Expected 'copy', 'move', 'batch_transfer', 'zip', 'unzip'.")
 
 
 class WriteFileTool(BaseTool):
@@ -5418,6 +5673,7 @@ __all__ = [
     "TerminalTool",
     "ReadFileTool",
     "CreateFolderTool",
+    "FileOperationsTool",
     "WriteFileTool",
     "ListDirectoryTool",
     "MemoryRecallTool",

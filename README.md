@@ -105,11 +105,16 @@ nemo voice --autostart
 - Generates semantic conventional commits based on staged diff analysis.
 - Automates multi-platform deploys (Netlify, Supabase, GitHub) after verifying green test suite passes.
 
-### 5. Ground-Truth Verification Engine
-- Validates file modifications, AST syntax correctness, and test exit codes before declaring any multi-step task complete.
-- Every release candidate must pass all 42 unit and integration tests (`tests/test_beast_tools.py` and `tests/test_voice_avatar.py`).
+### 5. Cross-Drive Native File Operations (`file_operations`)
+- High-speed recursive copying, moving, batch transferring, and zip/unzip archiving across drives (`C:`, `D:`, etc.).
+- Safe partition boundaries: allows user storage while blocking critical OS directories (`C:\Windows`, `System32`, `WindowsApps`).
+- Auto-resolves pronouns and recent artifacts across turns (`"that folder"`, `"those files"`).
 
-### 6. Secondary Desktop Utilities
+### 6. Ground-Truth Verification Engine
+- Validates file modifications, AST syntax correctness, and test exit codes before declaring any multi-step task complete.
+- Every release candidate must pass all unit and integration tests across tools and orchestrator.
+
+### 7. Secondary Desktop Utilities
 - **WinRT Screen Snipping**: Captures window crops and copies them to the Windows Clipboard (`CF_DIB`) or opens Windows Snip & Sketch.
 - **Hardware Diagnostics**: Real-time Win32 `GlobalMemoryStatusEx` RAM metrics in under 1ms, active port auditing, and process management.
 - **Hands-Free Local Voice**: Optional wake-word listener powered by local Whisper INT8 (`base.en`) with an always-on-top translucent taskbar pill.

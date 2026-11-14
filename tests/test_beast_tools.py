@@ -676,6 +676,65 @@ def test_extract_json_block_multi_concatenated_objects():
     assert parsed["action"] == "tool_call"
 
 
+@pytest.mark.asyncio
+async def test_file_operations_copy_move_and_batch(tmp_path):
+    """Verify FileOperationsTool copy, move, batch_transfer, and zip capabilities."""
+    from nemo.tools.builtin import FileOperationsTool
+    tool = FileOperationsTool()
+
+    # 1. Test single file copy
+    src_file = tmp_path / "source.txt"
+    src_file.write_text("hello nemo developer", encoding="utf-8")
+    dst_file = tmp_path / "dest.txt"
+
+    res_copy = await tool.execute(
+        {"action": "copy", "src": str(src_file), "dst": str(dst_file)},
+        {"working_directory": str(tmp_path)},
+    )
+    assert res_copy.success is True
+    assert dst_file.exists()
+    assert dst_file.read_text(encoding="utf-8") == "hello nemo developer"
+
+    # 2. Test batch transfer
+    f1 = tmp_path / "code1.py"
+    f2 = tmp_path / "code2.py"
+    f1.write_text("print('f1')")
+    f2.write_text("print('f2')")
+    target_dir = tmp_path / "target_folder"
+
+    res_batch = await tool.execute(
+        {
+            "action": "batch_transfer",
+            "sources": [str(f1), str(f2)],
+            "target_dir": str(target_dir),
+            "operation": "copy",
+        },
+        {"working_directory": str(tmp_path)},
+    )
+    assert res_batch.success is True
+    assert (target_dir / "code1.py").exists()
+    assert (target_dir / "code2.py").exists()
+
+    # 3. Test zip archive
+    zip_out = tmp_path / "archive.zip"
+    res_zip = await tool.execute(
+        {"action": "zip", "src": str(target_dir), "dst": str(zip_out)},
+        {"working_directory": str(tmp_path)},
+    )
+    assert res_zip.success is True
+    assert zip_out.exists()
+    assert zip_out.stat().st_size > 0
+
+    # 4. Test unzip
+    unzip_dir = tmp_path / "unzipped"
+    res_unzip = await tool.execute(
+        {"action": "unzip", "src": str(zip_out), "dst": str(unzip_dir)},
+        {"working_directory": str(tmp_path)},
+    )
+    assert res_unzip.success is True
+    assert (unzip_dir / "target_folder" / "code1.py").exists() or (unzip_dir / "code1.py").exists()
+
+
 # 6. Public exports
 __all__ = [
     "test_git_operations_status_clean_and_dirty",

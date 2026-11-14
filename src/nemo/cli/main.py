@@ -8,6 +8,7 @@ import platform
 import shutil
 import subprocess
 import sys
+from typing import Any
 
 # 2. Third-party imports
 from rich.console import Console
@@ -941,14 +942,93 @@ def task(
     async def _run_agent():
         await init_db()
         orchestrator = AgentOrchestrator()
-        console.print(f"[bold cyan]Starting task:[/bold cyan] {objective}")
+        console.print(Panel(
+            f"[bold]{objective}[/bold]",
+            title="[bold cyan]NEMO Task Initialized[/bold cyan]",
+            border_style="cyan",
+            padding=(0, 2),
+        ))
 
-        with console.status("[bold green]Deliberating, executing, and verifying..."):
-            state = await orchestrator.run(
-                objective=objective,
-                max_iterations=max_steps,
-                conversation_id=conversation_id,
-            )
+        active_plan: list[str] = []
+        plan_shown = False
+        current_step_num = 1
+        total_steps_num = 1
+
+        def on_step_callback(event: dict[str, Any]) -> None:
+            nonlocal active_plan, plan_shown, current_step_num, total_steps_num
+            etype = event.get("type")
+
+            if etype == "plan":
+                steps = event.get("steps", [])
+                if steps and not plan_shown:
+                    active_plan = steps
+                    total_steps_num = len(steps)
+                    plan_shown = True
+                    plan_lines = "\n".join(f"  [dim]⏳[/dim] [bold]{s}[/bold]" for s in steps)
+                    console.print(Panel(
+                        plan_lines,
+                        title=f"[bold cyan]Plan: {len(steps)} Steps to Complete[/bold cyan]",
+                        border_style="cyan",
+                        padding=(0, 2),
+                    ))
+
+            elif etype == "thought":
+                thought_text = event.get("content", "").strip()
+                if thought_text:
+                    console.print(f"\n[dim italic]🤔 Thinking: {thought_text}[/dim italic]")
+
+            elif etype == "tool_start":
+                tool_name = event.get("tool", "")
+                args = event.get("arguments", {})
+                step_idx = event.get("step", current_step_num)
+                total_idx = event.get("total_steps", total_steps_num)
+                step_prefix = f"[{step_idx}/{total_idx}]" if total_idx > 1 else "[Step]"
+
+                # Format arguments cleanly
+                if isinstance(args, dict):
+                    args_formatted = ", ".join(
+                        f"{k}='{v}'" if isinstance(v, str) and len(v) < 60 else f"{k}={v}"
+                        for k, v in args.items()
+                    )
+                else:
+                    args_formatted = str(args)
+                if len(args_formatted) > 120:
+                    args_formatted = args_formatted[:117] + "..."
+
+                console.print(f"\n[bold yellow]⚡ {step_prefix} Action:[/bold yellow] [bold cyan]{tool_name}[/bold cyan] [dim]({args_formatted})[/dim]")
+
+            elif etype == "tool_end":
+                success = event.get("success", True)
+                step_idx = event.get("step", current_step_num)
+                total_idx = event.get("total_steps", total_steps_num)
+                step_prefix = f"[{step_idx}/{total_idx}]" if total_idx > 1 else "[Step]"
+
+                if success:
+                    data = event.get("data")
+                    note = ""
+                    if isinstance(data, dict):
+                        note = data.get("note") or data.get("path") or data.get("summary") or str(data)[:100]
+                    elif data:
+                        note = str(data)[:100]
+                    console.print(f" [bold green]✓ {step_prefix}[/bold green] [green]{note}[/green]")
+                else:
+                    err = event.get("error", "Unknown error")
+                    console.print(f" [bold red]✗ {step_prefix}[/bold red] [red]{err}[/red]")
+
+            elif etype == "self_healing":
+                tool_name = event.get("tool", "")
+                err = event.get("error", "")
+                step_idx = event.get("step", current_step_num)
+                total_idx = event.get("total_steps", total_steps_num)
+                step_prefix = f"[{step_idx}/{total_idx}]" if total_idx > 1 else "[Step]"
+                console.print(f" [bold yellow]🔄 {step_prefix} Auto-Recovery:[/bold yellow] [yellow]Fixing {tool_name} error ({str(err)[:80]})...[/yellow]")
+
+        state = await orchestrator.run(
+            objective=objective,
+            max_iterations=max_steps,
+            conversation_id=conversation_id,
+            on_step=on_step_callback,
+        )
 
         console.print("\n[bold]Execution Steps:[/bold]")
         for record in state.tool_history:

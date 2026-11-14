@@ -41,6 +41,7 @@ Core Principles & Rules:
    - For creating folders: invoke `create_folder`. Fast native directory creation.
    - For creating or writing files: invoke `write_file`. Fast native file write.
      CRITICAL: NEVER use PowerShell echo/Out-File/terminal commands to create files or folders! Write pure raw text/code without PowerShell backtick escaping.
+   - For copying, moving, batch transferring files across directories/drives, or creating/extracting zip archives: invoke `file_operations` (action='copy', 'move', 'batch_transfer', 'zip', 'unzip'). High-speed native file operations across drives (C:, D:, etc.).
    - For Git push, CI/CD, Netlify, or Vercel deployment: ALWAYS invoke `analyze_deployment` first to audit git remotes, verify .gitignore prevents .env leaks, and validate build scripts.
    - For project initialization & servers: invoke `inspect_project_environment` to inspect dependencies. If missing, install them. For dev servers (e.g. `npm run dev`), check ports with `port_manager`, invoke `launch_background_process`, verify with `http_probe`, then call `open_browser`.
    - For scaffolding new stacks (React TypeScript, Next.js, FastAPI, Node): invoke `scaffold_project`.
@@ -85,11 +86,18 @@ Core Principles & Rules:
      * "A 10-second timer is active."
      * "Playing music now."
 7. RESPONSE FORMAT: Output EXACTLY ONE JSON block per turn (never concatenate multiple tool calls or JSON blocks into one turn):
-   For taking an action:
+   When taking an action on a multi-step workflow, include an upfront plan list naming the steps:
    ```json
    {{
-     "thought": "<reasoning on current facts and observations>",
+     "thought": "<reasoning on current facts, what was found, and what to do next>",
      "hypothesis": "<what this action will prove or achieve>",
+     "plan": [
+       "1. <concise title of step 1>",
+       "2. <concise title of step 2>",
+       "3. <concise title of step 3>"
+     ],
+     "current_step": 1,
+     "total_steps": 3,
      "action": "tool_call",
      "tool": "<tool_name>",
      "arguments": {{...}}
@@ -192,25 +200,21 @@ class AgentOrchestrator:
             max_iterations=max_iterations,
         )
 
-        # Establish or retrieve persistent conversation session
-        if conversation_id:
-            conv = await self.conv_repo.get_conversation(conversation_id)
-            if conv:
-                state.conversation_id = conv.id
-            else:
-                conv = await self.conv_repo.create_conversation(title=objective[:60], project_id=project_id)
-                state.conversation_id = conv.id
-        else:
-            conv = await self.conv_repo.create_conversation(title=objective[:60], project_id=project_id)
-            state.conversation_id = conv.id
+        # Establish or retrieve persistent conversation session (Unified Master Memory)
+        UNIFIED_CONVERSATION_ID = "unified_nemo_thread"
+        target_conv_id = conversation_id or UNIFIED_CONVERSATION_ID
+        conv = await self.conv_repo.get_conversation(target_conv_id)
+        if not conv:
+            conv = await self.conv_repo.create_conversation(title="Unified Master Agent Memory", project_id=project_id)
+        state.conversation_id = conv.id
 
         # Record user message in DB
         await self.conv_repo.add_message(state.conversation_id, "user", objective)
 
         verifier = self.verifier or OutcomeVerifier(workspace_root=cwd)
 
-        # Retrieve relevant memories
-        memories = await self.memory.search_memories(objective, project_id=project_id, limit=5)
+        # Retrieve relevant memories via semantic search
+        memories = await self.memory.search_memories(objective, project_id=project_id, limit=8)
         mem_str = ""
         if memories:
             mem_str = "Long-Term Project Memories:\n" + "\n".join(f"- {m.content}" for m in memories)
@@ -234,37 +238,75 @@ class AgentOrchestrator:
             ChatMessage(role="system", content=system_msg),
         ]
 
-        # Inject previous conversation messages for conversational continuity if resuming
-        if conversation_id:
-            prior_msgs = await self.conv_repo.get_messages(state.conversation_id, limit=20)
-            # Exclude the current message we just added
-            for pm in prior_msgs[:-1]:
-                messages.append(ChatMessage(role=pm.role, content=pm.content))
+        # Inject previous conversation messages for conversational continuity
+        prior_msgs = await self.conv_repo.get_messages(state.conversation_id, limit=16)
+        for pm in prior_msgs[:-1]:
+            messages.append(ChatMessage(role=pm.role, content=pm.content))
 
         messages.append(ChatMessage(role="user", content=f"Execute task: {objective}"))
 
         while state.iteration < state.max_iterations and not state.completed:
             state.iteration += 1
 
-            llm_res = await self.provider.generate(messages, temperature=0.2, max_tokens=2048)
-            action_data = extract_json_block(llm_res.content)
+            if on_step:
+                on_step({"type": "stream_start", "iteration": state.iteration})
+
+            full_content = ""
+            try:
+                async for chunk in self.provider.stream(messages, temperature=0.2, max_tokens=2048):
+                    full_content += chunk
+                    if on_step:
+                        on_step({"type": "token", "content": chunk, "iteration": state.iteration})
+            except Exception:
+                llm_res = await self.provider.generate(messages, temperature=0.2, max_tokens=2048)
+                full_content = llm_res.content
+
+            if on_step:
+                on_step({"type": "stream_end", "iteration": state.iteration})
+
+            action_data = extract_json_block(full_content)
 
             if not action_data:
                 state.completed = True
-                state.final_answer = llm_res.content
+                state.final_answer = full_content
                 if on_step:
                     on_step({"type": "finish", "answer": state.final_answer})
                 break
 
+            # Capture plan and steps
+            if "plan" in action_data and isinstance(action_data["plan"], list) and action_data["plan"]:
+                state.plan = [str(s) for s in action_data["plan"]]
+                state.total_steps = len(state.plan)
+                if on_step:
+                    on_step({
+                        "type": "plan",
+                        "steps": state.plan,
+                        "current_step": state.current_step,
+                        "total_steps": state.total_steps,
+                    })
+
+            if "current_step" in action_data:
+                try:
+                    state.current_step = int(action_data["current_step"])
+                except Exception:
+                    pass
+
             # Capture thought & hypothesis into deliberation history
             if "thought" in action_data or "hypothesis" in action_data:
+                thought_str = action_data.get("thought", "")
+                hyp_str = action_data.get("hypothesis", "")
                 state.deliberation_history.append({
                     "iteration": state.iteration,
-                    "thought": action_data.get("thought", ""),
-                    "hypothesis": action_data.get("hypothesis", ""),
+                    "thought": thought_str,
+                    "hypothesis": hyp_str,
                 })
-                if on_step and action_data.get("thought"):
-                    on_step({"type": "thought", "content": action_data["thought"]})
+                if on_step and thought_str:
+                    on_step({
+                        "type": "thought",
+                        "content": thought_str,
+                        "step": state.current_step,
+                        "total_steps": state.total_steps,
+                    })
 
             action_type = action_data.get("action")
             if action_type == "finish":
@@ -290,7 +332,7 @@ class AgentOrchestrator:
 
                 if not verification_passed:
                     # Reject finish and trigger corrective deliberation
-                    messages.append(ChatMessage(role="assistant", content=llm_res.content))
+                    messages.append(ChatMessage(role="assistant", content=full_content))
                     feedback = (
                         "Verification Gate REJECTED your finish action. Ground-truth checks failed:\n"
                         + "\n".join(f"- {e}" for e in verification_errors)
@@ -314,13 +356,24 @@ class AgentOrchestrator:
             if tool_name and self.tools.get_tool(tool_name):
                 tool_args = action_data.get("arguments", {})
                 if on_step:
-                    on_step({"type": "tool_start", "tool": tool_name, "arguments": tool_args})
+                    on_step({
+                        "type": "tool_start",
+                        "tool": tool_name,
+                        "arguments": tool_args,
+                        "step": state.current_step,
+                        "total_steps": state.total_steps,
+                        "plan": state.plan,
+                    })
 
                 # Track written / modified files
-                if tool_name == "write_file" and "path" in tool_args:
+                if tool_name in ("write_file", "file_operations") and "path" in tool_args:
                     file_path = str(tool_args["path"])
                     if file_path not in state.modified_files:
                         state.modified_files.append(file_path)
+                elif tool_name == "file_operations":
+                    for k in ("dst", "target_dir"):
+                        if k in tool_args and str(tool_args[k]) not in state.modified_files:
+                            state.modified_files.append(str(tool_args[k]))
 
                 # Execute tool
                 tool_result = await self.tools.execute(
@@ -336,10 +389,13 @@ class AgentOrchestrator:
                         "success": tool_result.success,
                         "data": tool_result.data,
                         "error": tool_result.error,
+                        "step": state.current_step,
+                        "total_steps": state.total_steps,
                     })
 
                 step_record = {
                     "iteration": state.iteration,
+                    "step": state.current_step,
                     "tool": tool_name,
                     "arguments": tool_args,
                     "thought": action_data.get("thought", ""),
@@ -350,10 +406,18 @@ class AgentOrchestrator:
                 }
                 state.tool_history.append(step_record)
 
-                messages.append(ChatMessage(role="assistant", content=llm_res.content))
+                messages.append(ChatMessage(role="assistant", content=full_content))
 
                 # Reflection challenge if tool failed
                 if not tool_result.success:
+                    if on_step:
+                        on_step({
+                            "type": "self_healing",
+                            "tool": tool_name,
+                            "error": tool_result.error,
+                            "step": state.current_step,
+                            "message": f"Action failed: {tool_result.error}. Engaging auto-recovery...",
+                        })
                     obs_content = json.dumps({
                         "tool": tool_name,
                         "success": False,

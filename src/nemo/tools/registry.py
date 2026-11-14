@@ -22,6 +22,7 @@ from nemo.tools.builtin import (
     DocumentGeneratorTool,
     DocumentReaderTool,
     EnvConfigInspectorTool,
+    FileOperationsTool,
     FindFilesTool,
     GitDiffTool,
     GitOperationsTool,
@@ -75,6 +76,7 @@ class ToolRegistry:
         self.register(ManageBackgroundProcessTool())
         self.register(ReadFileTool())
         self.register(CreateFolderTool(policy=self.policy))
+        self.register(FileOperationsTool(policy=self.policy))
         self.register(WriteFileTool(policy=self.policy))
         self.register(ListDirectoryTool())
         self.register(FindFilesTool())

@@ -21,6 +21,9 @@ class AgentState(BaseModel):
     project_id: str | None = None
     iteration: int = 0
     max_iterations: int = 10
+    plan: list[str] = Field(default_factory=list)
+    current_step: int = 1
+    total_steps: int = 1
     tool_history: list[dict[str, Any]] = Field(default_factory=list)
     deliberation_history: list[dict[str, Any]] = Field(default_factory=list)
     modified_files: list[str] = Field(default_factory=list)

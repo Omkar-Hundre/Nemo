@@ -76,20 +76,18 @@ class SessionContextManager:
             if age > max_age_minutes:
                 return ""
 
-            relative_words = {"that", "this", "it", "inside", "there", "above", "same", "continue", "previous"}
+            relative_words = {"that", "this", "it", "inside", "there", "above", "same", "continue", "previous", "copy", "move", "zip", "delete", "run", "check", "verify", "compress"}
             tokens = set(current_objective.lower().split())
             has_reference = bool(tokens & relative_words)
 
-            if not has_reference:
-                return ""
-
             paths_str = ", ".join(data.get("target_paths", []))
+            ref_warning = "CRITICAL: The user refers to previous context. Resolve 'that folder', 'that file', or 'it' to the path above.\n" if has_reference else ""
             return (
-                f"\nContext from previous task ({int(age)} minutes ago):\n"
+                f"\nRecent Workspace Context (last task completed {int(age)} minutes ago):\n"
                 f"- Previous Objective: {data.get('objective', '')}\n"
-                f"- Target Paths / Folders Created: {paths_str or data.get('working_directory', '')}\n"
+                f"- Target Paths / Artifacts: {paths_str or data.get('working_directory', '')}\n"
                 f"- Previous Result Summary: {data.get('outcome', '')[:300]}\n"
-                f"CRITICAL: If the user refers to 'that folder', 'that file', or 'it', resolve it to the path above.\n"
+                f"{ref_warning}"
             )
         except Exception:
             return ""

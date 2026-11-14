@@ -30,10 +30,26 @@ class SecurityPolicy:
         self.workspace_root = Path(workspace_root).resolve() if workspace_root else Path.cwd().resolve()
 
     def is_path_safe(self, path: Path | str, base_dir: Path | str | None = None) -> bool:
-        """Verify path is contained inside workspace or allowed project boundary."""
+        """Verify path is contained inside workspace or allowed project boundary, allowing safe user drives while blocking system roots."""
         base = Path(base_dir).resolve() if base_dir else self.workspace_root
         p = Path(path)
         target = (base / p).resolve() if not p.is_absolute() else p.resolve()
+
+        # Critical: Block OS root system and destructive sensitive targets
+        target_str = str(target).lower().replace("/", "\\")
+        forbidden_patterns = (
+            r"\windows\system32",
+            r"\windows\syswow64",
+            r"\windows\winsxs",
+            r"\program files\windowsapps",
+            r"\$recycle.bin",
+            r"\system volume information",
+            r"\boot",
+            r"\recovery",
+        )
+        for pattern in forbidden_patterns:
+            if pattern in target_str:
+                return False
 
         # Check workspace boundary and base execution directory
         for root in [self.workspace_root, base]:
@@ -43,7 +59,7 @@ class SecurityPolicy:
             except ValueError:
                 continue
 
-        # Allow user working directories (Downloads, Desktop, Documents) and Nemo state directory (~/.nemo)
+        # Allow user working directories (Downloads, Desktop, Documents, ~/.nemo)
         user_home = Path.home()
         for u_dir in (
             user_home / "Downloads",
@@ -56,6 +72,10 @@ class SecurityPolicy:
                 return True
             except ValueError:
                 continue
+
+        # Allow user-accessible secondary local storage drives (e.g. D:\, E:\, non-system drives)
+        if target.drive and target.drive.lower() != "c:":
+            return True
 
         return False
 
@@ -120,6 +140,15 @@ class SecurityPolicy:
             if not self.is_path_safe(target, base_dir=base_dir):
                 return RiskLevel.L3
             return RiskLevel.L2
+        if tool_name == "file_operations":
+            for k in ("src", "dst", "target_dir", "path"):
+                val = arguments.get(k)
+                if val and not self.is_path_safe(val, base_dir=base_dir):
+                    return RiskLevel.L3
+            for s in arguments.get("sources", []):
+                if s and not self.is_path_safe(s, base_dir=base_dir):
+                    return RiskLevel.L3
+            return RiskLevel.L1
         if tool_name in ("ide_open", "ide_open_file", "open_browser"):
             return RiskLevel.L0
 
