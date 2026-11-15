@@ -26,7 +26,7 @@ class AudioCaptureService:
         chunk_duration_ms: int = 30,
         silence_timeout_sec: float = 1.1,
         pre_roll_sec: float = 0.6,
-        energy_threshold: float = 0.0025,
+        energy_threshold: float = 0.005,
     ) -> None:
         self.sample_rate = sample_rate
         self.chunk_size = int(sample_rate * (chunk_duration_ms / 1000.0))
@@ -118,3 +118,10 @@ class AudioCaptureService:
             if self._audio_queue:
                 return self._audio_queue.popleft()
         return None
+
+    def clear_buffer(self) -> None:
+        """Discard pending and recorded speech chunks to avoid stale audio accumulation."""
+        with self._lock:
+            self._audio_queue.clear()
+            self._speech_buffer.clear()
+            self._is_speaking = False

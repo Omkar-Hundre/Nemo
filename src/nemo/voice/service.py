@@ -60,6 +60,7 @@ class NemoVoiceService:
         self._proactive_silenced_until = 0.0
         self._last_proactive_checkin = time.time()
         self._last_interaction_time = time.time()
+        self._is_task_running = False
 
         # Text-To-Speech Synthesizer
         self.tts = NemoTtsEngine() if self.enable_tts else None
@@ -154,6 +155,14 @@ class NemoVoiceService:
         while not self._stop_event.is_set():
             if not self.enable_voice or not self.audio or not self.engine:
                 time.sleep(0.2)
+                continue
+
+            # Pause speech listening while an agent or remote phone task is actively executing
+            # to give 100% CPU to the task, prevent GIL starvation, and stop ambient noise pickup
+            if self._is_task_running or (self.task_queue and self.task_queue._current_task):
+                if self.audio:
+                    self.audio.clear_buffer()
+                time.sleep(0.15)
                 continue
 
             chunk = self.audio.get_speech_chunk(timeout=0.1)
@@ -334,10 +343,13 @@ class NemoVoiceService:
         """Relay task queue state updates to taskbar action pill and console."""
         pill_state = "idle"
         if state == "working":
+            self._is_task_running = True
             pill_state = "working"
-        elif "Complete" in message:
+        elif "Complete" in message or state in ("completed", "idle", "sleeping"):
+            self._is_task_running = False
             pill_state = "completed"
-            console.print(f"[bold green]✓ {message}[/bold green]")
+            if "Complete" in message:
+                console.print(f"[bold green]✓ {message}[/bold green]")
         elif state == "listening":
             pill_state = "listening"
 
@@ -389,6 +401,7 @@ class NemoVoiceService:
                         if self.panel:
                             self.panel.update_status("working", f"Phone: {prompt[:20]}")
 
+                        self._is_task_running = True
                         try:
                             if self._loop and self._loop.is_running():
                                 fut = asyncio.run_coroutine_threadsafe(
@@ -415,6 +428,8 @@ class NemoVoiceService:
                         except Exception as ex:
                             bridge.update_task_status(t_id, status="failed", error=str(ex))
                             console.print(f"[bold red][PHONE TASK ERROR][/bold red] {ex}")
+                        finally:
+                            self._is_task_running = False
 
                 time.sleep(1.5)
             except Exception as exc:

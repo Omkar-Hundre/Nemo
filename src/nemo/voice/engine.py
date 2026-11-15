@@ -46,7 +46,7 @@ class WhisperVoiceEngine:
 
         segments, _ = self.model.transcribe(
             audio,
-            beam_size=3,
+            beam_size=1,
             language="en",
             initial_prompt="Nemo, Hey Nemo, Nemo assistant, Clovi, Omkar, WhatsApp, Bundu, Goutam, Gautam, Patil, placements, COSEM, DLMS, Python, Antigravity, FastAPI, Brave, GitHub, pytest, Windows, terminal",
             vad_filter=True,

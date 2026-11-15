@@ -1101,7 +1101,9 @@
       "apikey": SUPABASE_KEY,
       "Authorization": "Bearer " + SUPABASE_KEY,
       "Content-Type": "application/json",
-      "Prefer": "return=representation"
+      "Prefer": "return=representation",
+      "Cache-Control": "no-cache, no-store, must-revalidate",
+      "Pragma": "no-cache"
     };
 
     // State (100% Private - IP and Key stored strictly in phone localStorage, NEVER leaked)
@@ -1523,17 +1525,32 @@
     // CHAT ENGINE & SUPABASE SYNC (Robust, No Apostrophe Breaks)
     // =========================================================
 
+    let allTasks = [];
+    let pollTimeout = null;
+    let isPolling = false;
+
     async function sendPrompt(text) {
       if (!text || !text.trim()) return;
       const prompt = text.trim();
       document.getElementById('promptInput').value = '';
 
+      // Optimistic instant bubble insertion so user sees prompt immediately
+      const tempId = 'temp_' + Date.now();
+      const optimisticTask = {
+        id: tempId,
+        prompt: prompt,
+        status: 'pending',
+        created_at: new Date().toISOString()
+      };
+      allTasks.push(optimisticTask);
+      renderChat(allTasks);
       updateStatusUI('working', 'sending...');
 
       try {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/nemo_remote_tasks`, {
           method: 'POST',
           headers: HEADERS,
+          cache: 'no-store',
           body: JSON.stringify({
             prompt: prompt,
             status: 'pending',
@@ -1541,7 +1558,7 @@
           })
         });
         if (res.ok) {
-          loadTasks();
+          await loadTasks();
         }
       } catch (err) {
         console.error("Submit error:", err);
@@ -1555,14 +1572,17 @@
 
     async function loadTasks() {
       try {
-        // Fetch 50 most recent tasks in descending order, then reverse to chronological order
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/nemo_remote_tasks?order=created_at.desc&limit=50`, {
-          headers: HEADERS
+        // Cache-busting URL with _t=timestamp and cache: 'no-store' to guarantee fresh data without page reload
+        const url = `${SUPABASE_URL}/rest/v1/nemo_remote_tasks?order=created_at.desc&limit=50&_t=${Date.now()}`;
+        const res = await fetch(url, {
+          headers: HEADERS,
+          cache: 'no-store'
         });
         if (!res.ok) return;
         const tasks = await res.json();
         tasks.reverse(); // Now in chronological order: oldest to newest
-        renderChat(tasks);
+        allTasks = tasks;
+        renderChat(allTasks);
 
         const hasRunning = tasks.some(t => t.status === 'running' || t.status === 'pending');
         if (hasRunning) {
@@ -1811,10 +1831,59 @@
     setInterval(purgeNetlifyBadge, 500);
     window.addEventListener('load', purgeNetlifyBadge);
 
+    // Live polling: 800ms when tasks active, 1500ms when idle
+    async function startAdaptivePolling() {
+      if (!isPolling) {
+        isPolling = true;
+        try {
+          await loadTasks();
+        } catch (e) {
+        } finally {
+          isPolling = false;
+        }
+      }
+      const hasActive = allTasks.some(t => t.status === 'running' || t.status === 'pending');
+      const delay = hasActive ? 800 : 1500;
+      pollTimeout = setTimeout(startAdaptivePolling, delay);
+    }
+
+    // Supabase Realtime WebSocket Connection (Instant Push without polling lag)
+    function initRealtimeTasks() {
+      try {
+        const wsUrl = `wss://jdrcwujxrtxcyahigbmi.supabase.co/realtime/v1/websocket?apikey=${SUPABASE_KEY}&vsn=1.0.0`;
+        const rtWs = new WebSocket(wsUrl);
+        rtWs.onopen = () => {
+          rtWs.send(JSON.stringify({
+            topic: "realtime:public:nemo_remote_tasks",
+            event: "phx_join",
+            payload: { config: { postgres_changes: [{ event: "*", schema: "public", table: "nemo_remote_tasks" }] } },
+            ref: "tasks_sub"
+          }));
+          setInterval(() => {
+            if (rtWs.readyState === WebSocket.OPEN) {
+              rtWs.send(JSON.stringify({ topic: "phoenix", event: "heartbeat", payload: {}, ref: "hb" }));
+            }
+          }, 25000);
+        };
+        rtWs.onmessage = (e) => {
+          try {
+            const msg = JSON.parse(e.data);
+            if (msg.event === "postgres_changes" || msg.event === "INSERT" || msg.event === "UPDATE") {
+              loadTasks();
+            }
+          } catch (err) {}
+        };
+        rtWs.onclose = () => {
+          setTimeout(initRealtimeTasks, 3000);
+        };
+      } catch (e) {}
+    }
+
     // Initialize
     applyTheme(currentTheme);
     loadTasks();
-    setInterval(loadTasks, 2000);
+    startAdaptivePolling();
+    initRealtimeTasks();
   </script>
 </body>
 </html>

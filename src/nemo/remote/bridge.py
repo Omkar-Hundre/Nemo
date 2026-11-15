@@ -126,8 +126,35 @@ class NemoRemoteBridge:
         if self.on_task_start:
             self.on_task_start(task)
 
+        # Fast path 0: Instant Greetings & Conversational Queries (0.02s, zero latency)
+        prompt_lower = prompt.lower().strip()
+        clean_greeting = prompt_lower.rstrip(".!?, ")
+        greetings = {
+            "hi": "Hello! How can I help you today?",
+            "hii": "Hello! How can I help you today?",
+            "hiii": "Hello! How can I help you today?",
+            "hello": "Hello! How can I help you today?",
+            "hey": "Hey! How can I help you today?",
+            "heyy": "Hey! How can I help you today?",
+            "yo": "Yo! What would you like to run on your PC?",
+            "how are you": "I'm doing great, Omkar! Ready to assist with tasks or stream your PC screen.",
+            "how are u": "I'm doing great, Omkar! Ready to assist with tasks or stream your PC screen.",
+            "who are you": "I'm Nemo, your AI-native developer and Windows automation assistant.",
+            "good morning": "Good morning! Ready for the day's tasks.",
+            "good evening": "Good evening! Ready to help you with your PC.",
+            "what are you doing right now": "I'm running on your PC, listening for commands and ready to automate.",
+            "status": "Nemo OS is online and operational. Ready to assist.",
+        }
+        if clean_greeting in greetings:
+            final_answer = greetings[clean_greeting]
+            self.update_task_status(task_id, status="completed", result=final_answer)
+            task["status"] = "completed"
+            task["result"] = final_answer
+            if self.on_task_complete:
+                self.on_task_complete(task)
+            return task
+
         # Fast path 1: Instant Screen Snapshot (0.3s, zero LLM tokens, 100% untruncated)
-        prompt_lower = prompt.lower()
         if any(w in prompt_lower for w in ("snapshot", "screenshot", "screen shot", "show me my screen", "show screen")):
             from nemo.tools.builtin import capture_screen_optimized_jpeg_b64
             b64 = capture_screen_optimized_jpeg_b64()
