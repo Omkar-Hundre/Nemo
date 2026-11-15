@@ -262,3 +262,89 @@ class TestVoiceQueueActiveFileAndDispatch:
             args = mock_wa.call_args[0]
             assert args[0] == "bund"
             assert args[2] == test_video
+
+
+class TestProjectDiscovery:
+    @pytest.mark.asyncio
+    async def test_project_discovery_phonetic_chloe_matches_clovi(self, tmp_path: Path):
+        from nemo.tools.builtin import ProjectDiscoveryTool
+
+        # Setup mock project directory for Clovi with win-unpacked build
+        clovi_dir = tmp_path / "Clovi"
+        clovi_dir.mkdir()
+        (clovi_dir / "package.json").write_text('{"name": "clovi", "description": "Clovi — Windows Floating Overlay Assistant with Gemini Vision"}')
+        unpacked_dir = clovi_dir / "release" / "win-unpacked"
+        unpacked_dir.mkdir(parents=True)
+        exe_file = unpacked_dir / "Clovi.exe"
+        exe_file.write_text("dummy exe")
+
+        tool = ProjectDiscoveryTool()
+        res = await tool.execute({
+            "query": "Chloe Kerken GUI tool which helps me find answers of questions",
+            "action": "search",
+            "search_roots": [str(tmp_path)],
+        }, context={})
+
+        assert res.success is True
+        top = res.data["top_match"]
+        assert top["name"] == "Clovi"
+        assert top["score"] >= 0.70
+        assert "win-unpacked" in top["unpacked_exe"]
+        assert "Clovi" in res.data["summary"]
+
+    @pytest.mark.asyncio
+    async def test_project_discovery_win_unpacked_launch(self, tmp_path: Path):
+        from nemo.tools.builtin import ProjectDiscoveryTool
+
+        clovi_dir = tmp_path / "Clovi"
+        clovi_dir.mkdir()
+        unpacked_dir = clovi_dir / "release" / "win-unpacked"
+        unpacked_dir.mkdir(parents=True)
+        exe_file = unpacked_dir / "Clovi.exe"
+        exe_file.write_text("dummy exe")
+
+        tool = ProjectDiscoveryTool()
+        with patch("subprocess.Popen") as mock_popen:
+            res = await tool.execute({
+                "query": "Can you just like open Win Unpacked version of Chloe?",
+                "action": "launch",
+                "search_roots": [str(tmp_path)],
+            }, context={})
+
+            assert res.success is True
+            assert res.data["action"] == "launch"
+            assert res.data["project"] == "Clovi"
+            assert "Clovi.exe" in res.data["executable"]
+            mock_popen.assert_called_once()
+            cmd_called = mock_popen.call_args[0][0]
+            assert "Clovi.exe" in cmd_called
+
+    @pytest.mark.asyncio
+    async def test_voice_queue_opens_win_unpacked_clovi(self, tmp_path: Path):
+        from nemo.tools.builtin import ProjectDiscoveryTool
+
+        clovi_dir = tmp_path / "Clovi"
+        clovi_dir.mkdir()
+        unpacked_dir = clovi_dir / "release" / "win-unpacked"
+        unpacked_dir.mkdir(parents=True)
+        exe_file = unpacked_dir / "Clovi.exe"
+        exe_file.write_text("dummy exe")
+
+        queue = IdempotentTaskQueue()
+        task = NemoTask(id="pd_task", name="Can you just like open Win Unpacked version of Chloe?", status="queued")
+
+        with patch.object(ProjectDiscoveryTool, "discover_candidates") as mock_disc, \
+             patch("subprocess.Popen") as mock_popen:
+            mock_disc.return_value = [{
+                "name": "Clovi",
+                "path": str(clovi_dir),
+                "score": 0.95,
+                "phonetic_match": True,
+                "description": "Clovi Overlay Assistant",
+                "unpacked_exe": str(exe_file),
+                "executables": [str(exe_file)],
+            }]
+            await queue._run_task_worker(task)
+            assert task.status == "completed"
+            assert "Clovi" in task.result
+            mock_popen.assert_called_once()

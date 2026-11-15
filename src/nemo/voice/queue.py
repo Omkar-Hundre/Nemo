@@ -345,6 +345,22 @@ class IdempotentTaskQueue:
                         self.on_step({"type": "finish", "answer": task.result})
                     if self.on_state_change:
                         self.on_state_change("sleeping", "Dispatched ✓")
+
+                # 6. Direct Project Discovery & App Launch
+                elif any(kw in cmd_lower for kw in ("open win unpacked", "win unpacked", "open project", "launch project", "open tool", "launch tool", "find project", "search project")) or (any(cmd_lower.startswith(p) for p in ("open ", "launch ", "start ", "run ")) and any(k in cmd_lower for k in ("clovi", "chloe", "version of", "unpacked", "project", "tool"))):
+                    from nemo.tools.builtin import ProjectDiscoveryTool
+                    tool = ProjectDiscoveryTool()
+                    res = await tool.execute({
+                        "query": task.name,
+                        "action": "launch" if any(a in cmd_lower for a in ("open", "launch", "start", "run")) else "search",
+                    }, context={})
+                    task.status = "completed" if res.success else "failed"
+                    task.result = (res.data or {}).get("summary") or res.error or "Project processed."
+                    task.completed_at = time.time()
+                    if self.on_step:
+                        self.on_step({"type": "finish", "answer": task.result})
+                    if self.on_state_change:
+                        self.on_state_change("sleeping", "Project Ready ✓")
                 else:
                     # Execute task via AgentOrchestrator
                     orchestrator = AgentOrchestrator()

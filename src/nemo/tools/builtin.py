@@ -6477,6 +6477,277 @@ class MessagingDispatchTool(BaseTool):
 
 
 
+class ProjectDiscoveryTool(BaseTool):
+    """Fuzzy, phonetic, and semantic project and application discovery across Windows drives."""
+    name = "project_discovery"
+    description = (
+        "Discover, search, or launch user projects, apps, and GUI tools across drives (D:\\, C:\\Users, etc.). "
+        "Tolerates speech-to-text phonetic variations (e.g., 'Chloe' -> 'Clovi', 'Kerken' -> 'Kraken') and "
+        "locates unpacked builds (win-unpacked/*.exe), executables, and project manifests."
+    )
+    risk_level = RiskLevel.L1
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Project name, tool name, or description (e.g. 'Chloe', 'Clovi', 'win unpacked Chloe', 'Zoip', 'GUI assistant')."
+                    },
+                    "action": {
+                        "type": "string",
+                        "enum": ["search", "launch", "open_folder"],
+                        "description": "Action to perform: 'search' to find matching projects/executables, 'launch' to execute the build/app, 'open_folder' to open in Explorer (default 'search')."
+                    },
+                    "target": {
+                        "type": "string",
+                        "description": "Optional specific target, e.g. 'unpacked', 'win-unpacked', 'portable', 'exe', or an explicit executable name."
+                    },
+                    "search_roots": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of root directories to scan (defaults to D:\\, C:\\Users\\<user>)."
+                    }
+                },
+                "required": ["query"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    @staticmethod
+    def _phonetize(s: str) -> str:
+        s = s.lower().strip()
+        replacements = [
+            ("ch", "c"), ("kh", "k"), ("oe", "ov"), ("ie", "i"),
+            ("y", "i"), ("ph", "f"), ("ck", "k"), ("kerken", "kraken")
+        ]
+        for old, new in replacements:
+            s = s.replace(old, new)
+        return s
+
+    @classmethod
+    def discover_candidates(cls, query: str, roots: list[Path] | None = None) -> list[dict[str, Any]]:
+        import difflib
+
+        if roots is None:
+            roots = [Path("D:/"), Path.home(), Path.home() / "Projects"]
+            cwd_parent = Path.cwd().parent
+            if cwd_parent not in roots and cwd_parent.exists():
+                roots.append(cwd_parent)
+
+        query_lower = query.lower().strip()
+
+        # Extract target type (unpacked, portable, exe) and clean entity keywords
+        entity_text = query_lower
+        target_type = None
+        for token in ["win unpacked", "win-unpacked", "unpacked", "portable", "exe", "application", "gui tool", "tool"]:
+            if token in entity_text:
+                target_type = token
+                entity_text = entity_text.replace(token, "")
+
+        for noise in ["can you", "just like", "open", "launch", "start", "version", "of", "the", "find", "actually", "its not", "it is in", "it is one of my projects", "mine itself"]:
+            entity_text = entity_text.replace(noise, "")
+
+        entity_keywords = [w.strip() for w in entity_text.split() if len(w.strip()) > 1]
+        if not entity_keywords:
+            entity_keywords = [query_lower]
+
+        candidates = []
+        for root in roots:
+            if not root or not root.exists():
+                continue
+            try:
+                for item in root.iterdir():
+                    if not item.is_dir() or item.name.startswith(("$", ".")):
+                        continue
+
+                    folder_name = item.name
+                    pkg_name = ""
+                    desc = ""
+                    exes: list[str] = []
+                    unpacked_exe: str | None = None
+
+                    # 1. Inspect package.json
+                    pkg_file = item / "package.json"
+                    if pkg_file.exists():
+                        try:
+                            pdata = json.loads(pkg_file.read_text(encoding="utf-8", errors="ignore"))
+                            pkg_name = pdata.get("name", "")
+                            desc = pdata.get("description", "")
+                        except Exception:
+                            pass
+
+                    # 2. Inspect README.md
+                    readme = item / "README.md"
+                    if not desc and readme.exists():
+                        try:
+                            desc = " ".join(readme.read_text(encoding="utf-8", errors="ignore").splitlines()[:5])
+                        except Exception:
+                            pass
+
+                    # 3. Locate compiled executables / unpacked builds
+                    unpacked_dir = item / "release" / "win-unpacked"
+                    if unpacked_dir.exists():
+                        for f in unpacked_dir.glob("*.exe"):
+                            exes.append(str(f))
+                            if not unpacked_exe:
+                                unpacked_exe = str(f)
+
+                    for cand_dir in [item / "dist", item / "build", item / "release", item]:
+                        if cand_dir.exists() and cand_dir != unpacked_dir:
+                            for f in cand_dir.glob("*.exe"):
+                                exes.append(str(f))
+
+                    # 4. Phonetic & Fuzzy String Comparison
+                    best_sim = 0.0
+                    is_phonetic = False
+                    targets_to_compare = [folder_name]
+                    if pkg_name:
+                        targets_to_compare.append(pkg_name)
+
+                    for t in targets_to_compare:
+                        for kw in entity_keywords:
+                            if kw == t.lower():
+                                best_sim = max(best_sim, 1.0)
+                            elif kw in t.lower() or t.lower() in kw:
+                                best_sim = max(best_sim, 0.85)
+                            else:
+                                r = difflib.SequenceMatcher(None, kw, t.lower()).ratio()
+                                best_sim = max(best_sim, r)
+
+                                p_kw = cls._phonetize(kw)
+                                p_t = cls._phonetize(t)
+                                pr = difflib.SequenceMatcher(None, p_kw, p_t).ratio()
+                                if pr > best_sim:
+                                    best_sim = pr
+                                    is_phonetic = True
+
+                    # 5. Semantic description matching boost
+                    desc_lower = desc.lower()
+                    for kw in ["gui", "answer", "question", "assistant", "overlay", "vision"] + entity_keywords:
+                        if kw in desc_lower:
+                            best_sim += 0.08
+
+                    # 6. Unpacked build boost
+                    if target_type in ("win unpacked", "win-unpacked", "unpacked") and unpacked_exe:
+                        best_sim += 0.25
+
+                    if best_sim >= 0.45:
+                        candidates.append({
+                            "name": folder_name,
+                            "path": str(item),
+                            "score": round(min(best_sim, 1.0), 3),
+                            "phonetic_match": is_phonetic,
+                            "description": desc,
+                            "unpacked_exe": unpacked_exe,
+                            "executables": exes,
+                        })
+            except Exception:
+                pass
+
+        candidates.sort(key=lambda x: x["score"], reverse=True)
+        return candidates
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        query = str(arguments.get("query") or "").strip()
+        action = str(arguments.get("action") or "search").lower().strip()
+        target = str(arguments.get("target") or "").lower().strip()
+        roots_arg = arguments.get("search_roots")
+
+        if not query:
+            return ToolResult(success=False, error="Search query or project name is required.")
+
+        custom_roots = [Path(r) for r in roots_arg] if roots_arg else None
+        candidates = self.discover_candidates(query, custom_roots)
+
+        if not candidates:
+            return ToolResult(
+                success=False,
+                error=f"No matching projects found for '{query}' across scanned drives."
+            )
+
+        top_match = candidates[0]
+
+        if action in ("launch", "open", "run"):
+            chosen_exe = None
+            if ("unpacked" in target or "unpacked" in query.lower()) and top_match.get("unpacked_exe"):
+                chosen_exe = top_match["unpacked_exe"]
+            elif top_match.get("executables"):
+                chosen_exe = top_match["executables"][0]
+
+            if chosen_exe and Path(chosen_exe).exists():
+                try:
+                    subprocess.Popen(f'start "" "{chosen_exe}"', shell=True)
+                    return ToolResult(
+                        success=True,
+                        data={
+                            "action": "launch",
+                            "project": top_match["name"],
+                            "path": top_match["path"],
+                            "executable": chosen_exe,
+                            "confidence": top_match["score"],
+                            "phonetic_match": top_match["phonetic_match"],
+                            "summary": f"Successfully launched {top_match['name']} ({Path(chosen_exe).name}) from {Path(chosen_exe).parent}.",
+                        }
+                    )
+                except Exception as ex:
+                    return ToolResult(success=False, error=f"Failed to launch executable '{chosen_exe}': {ex}")
+            else:
+                try:
+                    subprocess.Popen(f'explorer.exe "{top_match["path"]}"', shell=True)
+                    return ToolResult(
+                        success=True,
+                        data={
+                            "action": "open_folder",
+                            "project": top_match["name"],
+                            "path": top_match["path"],
+                            "confidence": top_match["score"],
+                            "summary": f"Opened project folder '{top_match['name']}' at {top_match['path']} in Windows Explorer (no compiled executable found).",
+                        }
+                    )
+                except Exception as ex:
+                    return ToolResult(success=False, error=f"Failed to open project folder: {ex}")
+
+        elif action == "open_folder":
+            try:
+                subprocess.Popen(f'explorer.exe "{top_match["path"]}"', shell=True)
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "open_folder",
+                        "project": top_match["name"],
+                        "path": top_match["path"],
+                        "summary": f"Opened project folder '{top_match['name']}' at {top_match['path']} in Windows Explorer.",
+                    }
+                )
+            except Exception as ex:
+                return ToolResult(success=False, error=f"Failed to open folder: {ex}")
+
+        else:
+            # action == "search"
+            suggestion = None
+            if top_match["score"] >= 0.70:
+                unpacked_info = f" with unpacked build at '{top_match['unpacked_exe']}'" if top_match.get("unpacked_exe") else ""
+                phonetic_info = f" (matches '{query}' via speech phonetic similarity)" if top_match["phonetic_match"] else ""
+                suggestion = f"Found '{top_match['name']}' at {top_match['path']}{phonetic_info}{unpacked_info}."
+
+            return ToolResult(
+                success=True,
+                data={
+                    "query": query,
+                    "top_match": top_match,
+                    "candidates": candidates[:5],
+                    "suggestion": suggestion,
+                    "summary": suggestion or f"Found {len(candidates)} project candidates matching '{query}'.",
+                }
+            )
+
+
+
 class UndoTool(BaseTool):
     """Roll back recent reversible filesystem operations using the atomic operation journal."""
     name = "undo"

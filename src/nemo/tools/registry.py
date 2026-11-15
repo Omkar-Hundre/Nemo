@@ -50,6 +50,7 @@ from nemo.tools.builtin import (
     WindowsGuiTool,
     ActiveFileInspectorTool,
     MessagingDispatchTool,
+    ProjectDiscoveryTool,
     WriteFileTool,
 )
 
@@ -116,6 +117,7 @@ class ToolRegistry:
         self.register(WindowsGuiTool())
         self.register(ActiveFileInspectorTool())
         self.register(MessagingDispatchTool())
+        self.register(ProjectDiscoveryTool())
 
     def register(self, tool: BaseTool) -> None:
         """Register a new tool."""
