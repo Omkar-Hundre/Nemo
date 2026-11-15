@@ -209,9 +209,11 @@ class AgentOrchestrator:
         # Establish or retrieve persistent conversation session (Unified Master Memory)
         UNIFIED_CONVERSATION_ID = "unified_nemo_thread"
         target_conv_id = conversation_id or UNIFIED_CONVERSATION_ID
-        conv = await self.conv_repo.get_conversation(target_conv_id)
-        if not conv:
-            conv = await self.conv_repo.create_conversation(title="Unified Master Agent Memory", project_id=project_id)
+        conv = await self.conv_repo.get_or_create_conversation(
+            conversation_id=target_conv_id,
+            title="Unified Master Agent Memory",
+            project_id=project_id,
+        )
         state.conversation_id = conv.id
 
         # Record user message in DB

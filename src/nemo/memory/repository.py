@@ -359,14 +359,34 @@ class ConversationRepository:
         self,
         title: str = "Untitled Session",
         project_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> Conversation:
         """Create a new tracked conversation session."""
-        conv = Conversation(title=title[:250], project_id=project_id)
+        conv_args: dict[str, Any] = {"title": title[:250], "project_id": project_id}
+        if conversation_id:
+            conv_args["id"] = conversation_id
+        conv = Conversation(**conv_args)
         async with self.session_provider() as session:
             session.add(conv)
             await session.commit()
             await session.refresh(conv)
             return conv
+
+    async def get_or_create_conversation(
+        self,
+        conversation_id: str = "unified_nemo_thread",
+        title: str = "Unified Master Agent Memory",
+        project_id: str | None = None,
+    ) -> Conversation:
+        """Retrieve existing persistent conversation or initialize one with consistent ID."""
+        conv = await self.get_conversation(conversation_id)
+        if not conv:
+            conv = Conversation(id=conversation_id, title=title[:250], project_id=project_id)
+            async with self.session_provider() as session:
+                session.add(conv)
+                await session.commit()
+                await session.refresh(conv)
+        return conv
 
     async def get_conversation(self, conversation_id: str) -> Conversation | None:
         """Retrieve conversation by ID with eager-loaded messages."""

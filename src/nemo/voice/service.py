@@ -53,9 +53,10 @@ class NemoVoiceService:
         self._stdin_thread: threading.Thread | None = None
 
         self._wake_active_until = 0.0
-        self.WAKE_WINDOW_SEC = 8.0
+        self.WAKE_WINDOW_SEC = 25.0
         self._proactive_silenced_until = 0.0
         self._last_proactive_checkin = time.time()
+        self._last_interaction_time = time.time()
 
         # Text-To-Speech Synthesizer
         self.tts = NemoTtsEngine() if self.enable_tts else None
@@ -149,9 +150,10 @@ class NemoVoiceService:
 
             chunk = self.audio.get_speech_chunk(timeout=0.1)
             if chunk is None:
-                # Check if wake window expired
+                # Check if wake window expired (do not expire while speech is actively streaming)
                 now = time.time()
-                if 0.0 < self._wake_active_until < now:
+                is_actively_speaking = bool(self.audio and getattr(self.audio, "_is_speaking", False))
+                if not is_actively_speaking and 0.0 < self._wake_active_until < now:
                     self._wake_active_until = 0.0
                     if not self.task_queue._current_task:
                         if self.panel:
@@ -186,6 +188,7 @@ class NemoVoiceService:
                     continue
 
                 if has_wake:
+                    self._last_interaction_time = now
                     self._wake_active_until = now + self.WAKE_WINDOW_SEC
                     console.print(f"[bold cyan][HEARD][/bold cyan] Wake word detected: '{text}'")
                     if self.panel:
@@ -193,18 +196,36 @@ class NemoVoiceService:
 
                     if command:
                         console.print(f"\n[bold green][VOICE TASK][/bold green] Executing: '[bold]{command}[/bold]'")
-                        self._wake_active_until = 0.0
                         self.task_queue.submit_command(command)
                 elif is_currently_awake and text.strip():
+                    self._last_interaction_time = now
+                    self._wake_active_until = now + self.WAKE_WINDOW_SEC
                     console.print(f"\n[bold green][VOICE TASK][/bold green] Follow-up command: '[bold]{text}[/bold]'")
-                    self._wake_active_until = 0.0
                     self.task_queue.submit_command(text)
                 else:
-                    disp = text if len(text) <= 60 else text[:57] + "..."
-                    console.print(f"[dim]🎤 [Mic Heard]: \"{disp}\" [italic](Say 'Nemo, ...' or type below)[/italic][/dim]")
-                    if self.panel:
-                        short_disp = text if len(text) <= 22 else text[:19] + "..."
-                        self.panel.update_status("idle", f"Heard: {short_disp}")
+                    # Check if speech is a natural developer inquiry or follow-up
+                    clean_lower = text.strip().lower()
+                    NATURAL_ACTIONS = (
+                        "can you", "could you", "where is", "where are",
+                        "find", "search", "check", "what is", "how do",
+                        "how can", "show me", "list", "open", "tell me",
+                        "so like", "so, like",
+                        "i didnt understand", "i didn't understand", "what does that mean",
+                    )
+                    recent_activity = (now - self._last_interaction_time) < 45.0
+                    is_action = any(clean_lower.startswith(act) for act in NATURAL_ACTIONS)
+
+                    if recent_activity or is_action:
+                        self._last_interaction_time = now
+                        self._wake_active_until = now + self.WAKE_WINDOW_SEC
+                        console.print(f"\n[bold green][CONVERSATIONAL TASK][/bold green] Executing: '[bold]{text}[/bold]'")
+                        self.task_queue.submit_command(text)
+                    else:
+                        disp = text if len(text) <= 60 else text[:57] + "..."
+                        console.print(f"[dim]🎤 [Mic Heard]: \"{disp}\" [italic](Say 'Nemo, ...' or type below)[/italic][/dim]")
+                        if self.panel:
+                            short_disp = text if len(text) <= 22 else text[:19] + "..."
+                            self.panel.update_status("idle", f"Heard: {short_disp}")
 
             except Exception as e:
                 logger.error("Error transcribing speech chunk: %s", e)
@@ -221,6 +242,9 @@ class NemoVoiceService:
                     continue
                 cmd = line.strip()
                 if cmd:
+                    now = time.time()
+                    self._last_interaction_time = now
+                    self._wake_active_until = now + self.WAKE_WINDOW_SEC
                     console.print(f"\n[bold green][TERMINAL COMMAND][/bold green] Executing: '[bold]{cmd}[/bold]'")
                     self.task_queue.submit_command(cmd)
             except Exception as ex:
@@ -246,20 +270,29 @@ class NemoVoiceService:
             if now < self._proactive_silenced_until:
                 continue
 
-            # Check if idle for at least 120s
+            # Check if idle for at least 300s (5 minutes) and no recent interaction
             is_idle = (
                 not self.task_queue.tasks or 
                 all(t.status in ("completed", "cancelled", "failed") for t in self.task_queue.tasks)
             )
-            if is_idle and (now - self._last_proactive_checkin) > 120.0:
+            time_since_interaction = now - self._last_interaction_time
+            if is_idle and time_since_interaction > 300.0 and (now - self._last_proactive_checkin) > 300.0:
                 self._last_proactive_checkin = now
+                self._last_interaction_time = now
                 question = inquiry_questions[q_idx % len(inquiry_questions)]
                 q_idx += 1
                 console.print(f"\n[bold cyan][NEMO INQUIRY][/bold cyan] {question}")
                 if self.panel:
                     self.panel.update_status("listening", "Nemo: Inquiring...")
+                # Record question in conversation context so follow-ups like "i didn't understand" know what was asked
+                from nemo.memory.repository import ConversationRepository
+                try:
+                    conv_repo = ConversationRepository()
+                    asyncio.run(conv_repo.add_message("unified_nemo_thread", "assistant", question))
+                except Exception:
+                    pass
                 self.tts.speak(question)
-                self._wake_active_until = now + 15.0
+                self._wake_active_until = now + 25.0
 
     def _on_agent_step(self, event: dict[str, Any]) -> None:
         """Handle real-time step streaming, thoughts, and outcomes from AgentOrchestrator."""
