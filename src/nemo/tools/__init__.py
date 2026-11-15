@@ -19,6 +19,7 @@ from nemo.tools.builtin import (
     GitOperationsTool,
     IDEOpenTool,
     ListDirectoryTool,
+    MemoryGraphTool,
     MemoryRecallTool,
     ProductiveModeTool,
     ReadFileTool,
@@ -66,5 +67,6 @@ __all__ = [
     "WindowsGuiTool",
     "ListDirectoryTool",
     "MemoryRecallTool",
+    "MemoryGraphTool",
     "IDEOpenTool",
 ]

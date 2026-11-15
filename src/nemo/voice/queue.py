@@ -159,14 +159,54 @@ class IdempotentTaskQueue:
 
                 try:
                     cmd_lower = task.name.strip().lower().rstrip(".!?,")
-                    if cmd_lower in ("undo", "undo that", "revert", "revert that", "rollback"):
+
+                    # 1. Polite dismissal & boundary awareness
+                    if cmd_lower in (
+                        "not now", "not now nemo", "later", "later nemo",
+                        "quiet", "keep quiet", "shut up", "leave me alone",
+                        "stop talking", "be quiet", "pause",
+                    ):
+                        task.status = "completed"
+                        task.result = "Sorry! I'll keep quiet. Let me know when you need me."
+                        task.completed_at = time.time()
+                        if self.on_step:
+                            self.on_step({"type": "finish", "answer": task.result})
+                        if self.on_state_change:
+                            self.on_state_change("sleeping", "Nemo: Kept Quiet (Paused)")
+
+                    # 2. Knowledge graph inspection via voice
+                    elif cmd_lower in (
+                        "show me the memory graph", "show memory graph", "show memory",
+                        "who am i", "what do you know about me", "show profile",
+                    ):
+                        from nemo.memory.graph import MemoryGraph
+                        graph = MemoryGraph()
+                        data = await graph.get_graph_data()
+                        prof = data.get("profile", {})
+                        task.status = "completed"
+                        task.result = (
+                            f"You are {prof.get('name', 'Developer')}. I know your preferences: "
+                            f"{prof.get('preferences', {}).get('browser', 'Brave')} browser, "
+                            f"{prof.get('preferences', {}).get('ide', 'Antigravity IDE')}, "
+                            f"and {data.get('triplets_count', 0)} knowledge graph relations."
+                        )
+                        task.completed_at = time.time()
+                        if self.on_step:
+                            self.on_step({"type": "finish", "answer": task.result})
+                        if self.on_state_change:
+                            self.on_state_change("sleeping", "Knowledge Graph Ready ✓")
+
+                    elif cmd_lower in ("undo", "undo that", "revert", "revert that", "rollback"):
                         from nemo.execution.journal import OperationJournal
                         res = OperationJournal().undo_last(1)
                         task.status = "completed" if res.get("success") else "failed"
                         task.result = res.get("message", "Undo complete.")
                         task.completed_at = time.time()
+                        if self.on_step:
+                            self.on_step({"type": "finish", "answer": task.result})
                         if self.on_state_change:
                             self.on_state_change("sleeping", f"Undo: {task.result}")
+
                     elif cmd_lower in ("productive mode", "start productive mode", "focus mode", "developer mode"):
                         from nemo.tools.builtin import ProductiveModeTool
                         tool = ProductiveModeTool()
@@ -174,6 +214,8 @@ class IdempotentTaskQueue:
                         task.status = "completed" if res.success else "failed"
                         task.result = (res.data or {}).get("briefing", "Productive mode active.")
                         task.completed_at = time.time()
+                        if self.on_step:
+                            self.on_step({"type": "finish", "answer": task.result})
                         if self.on_state_change:
                             self.on_state_change("sleeping", "Productive Mode ✓")
                     else:

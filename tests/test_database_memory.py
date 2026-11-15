@@ -15,12 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 # 3. Local / internal imports
 from nemo.database.connection import backup_database, init_db, restore_database
-from nemo.database.models import Base, Conversation, MemoryItem, Project
+from nemo.database.models import Base, Conversation, MemoryItem, Project, UserProfile
 from nemo.memory.repository import (
     ConversationRepository,
     MemoryRepository,
     ProjectRepository,
     TaskRepository,
+    UserProfileRepository,
 )
 
 # 4. Types, Protocols, Schemas
@@ -54,6 +55,7 @@ async def create_test_db():
             "mem_repo": MemoryRepository(session_provider=session_provider),
             "conv_repo": ConversationRepository(session_provider=session_provider),
             "task_repo": TaskRepository(session_provider=session_provider),
+            "user_repo": UserProfileRepository(session_provider=session_provider),
         }
 
         await engine.dispose()
@@ -474,6 +476,111 @@ async def test_conversation_repository_and_multi_turn_continuity():
         assert len(remaining_msgs) == 0
 
 
+@pytest.mark.asyncio
+async def test_user_profile_and_preferences():
+    """Verify Developer Profile creation, default preferences, and updates."""
+    async with create_test_db() as db:
+        user_repo: UserProfileRepository = db["user_repo"]
+
+        # 1. First retrieval bootstraps defaults
+        profile = await user_repo.get_or_create_profile(name="Omkar")
+        assert profile.name == "Omkar"
+        assert profile.preferences["browser"] == "Brave"
+        assert profile.preferences["ide"] == "Antigravity IDE"
+
+        # 2. Idempotent call returns same profile
+        profile2 = await user_repo.get_or_create_profile()
+        assert profile2.id == profile.id
+
+        # 3. Update preferences
+        updated = await user_repo.update_preferences({"theme": "dark_minimal", "fast_mode": True})
+        assert updated.preferences["theme"] == "dark_minimal"
+        assert updated.preferences["browser"] == "Brave"
+        assert updated.preferences["fast_mode"] is True
+
+
+@pytest.mark.asyncio
+async def test_knowledge_graph_triplets_and_bootstrapper():
+    """Verify (subject, predicate, object) triplets and KnowledgeGraphBootstrapper."""
+    async with create_test_db() as db:
+        mem_repo: MemoryRepository = db["mem_repo"]
+        user_repo: UserProfileRepository = db["user_repo"]
+        task_repo: TaskRepository = db["task_repo"]
+
+        from nemo.memory.backfill import KnowledgeGraphBootstrapper
+
+        boot = KnowledgeGraphBootstrapper(mem_repo=mem_repo, user_repo=user_repo, task_repo=task_repo)
+        res = await boot.run()
+        assert res["developer"] == "Omkar"
+        assert res["triplets_seeded"] >= 8
+
+        triplets = await mem_repo.list_triplets()
+        assert len(triplets) >= 8
+        subjects = {t["subject"] for t in triplets}
+        assert "Omkar" in subjects
+        assert "Nemo" in subjects
+
+        # Update triplet relation
+        upd = await mem_repo.add_triplet(
+            subject="Omkar",
+            predicate="uses_editor",
+            obj="Antigravity IDE Pro",
+        )
+        assert upd.object == "Antigravity IDE Pro"
+
+
+@pytest.mark.asyncio
+async def test_unified_memory_rag_and_graph_view():
+    """Verify MemoryGraph visualization and UnifiedMemoryRAG retrieval."""
+    async with create_test_db() as db:
+        mem_repo: MemoryRepository = db["mem_repo"]
+        user_repo: UserProfileRepository = db["user_repo"]
+        task_repo: TaskRepository = db["task_repo"]
+
+        from nemo.memory.graph import MemoryGraph
+        from nemo.memory.rag import UnifiedMemoryRAG
+
+        # Seed sample historical task
+        await task_repo.record_task("Build transactional undo journal", status="completed")
+
+        graph = MemoryGraph(mem_repo=mem_repo, user_repo=user_repo, task_repo=task_repo)
+        data = await graph.get_graph_data()
+        assert data["profile"]["name"] == "Omkar"
+        assert data["triplets_count"] >= 8
+
+        ascii_tree = await graph.to_ascii_tree()
+        assert "Antigravity IDE" in ascii_tree
+        assert "Omkar" in ascii_tree
+
+        rag = UnifiedMemoryRAG(mem_repo=mem_repo, user_repo=user_repo, task_repo=task_repo)
+        context_str = await rag.retrieve_context("What editor and browser does developer prefer?")
+        assert "Antigravity IDE" in context_str
+        assert "Brave" in context_str
+
+
+@pytest.mark.asyncio
+async def test_memory_graph_tool():
+    """Verify MemoryGraphTool actions (view, profile, search_tasks, triplets)."""
+    async with create_test_db() as db:
+        from nemo.tools.builtin import MemoryGraphTool
+        tool = MemoryGraphTool()
+
+        # View action
+        res_view = await tool.execute({"action": "view"}, {})
+        assert res_view.success is True
+        assert "graph_display" in res_view.data
+
+        # Profile action
+        res_prof = await tool.execute({"action": "profile"}, {})
+        assert res_prof.success is True
+        assert res_prof.data.get("name") == "Omkar"
+
+        # Triplets action
+        res_triplets = await tool.execute({"action": "triplets"}, {})
+        assert res_triplets.success is True
+        assert "entities" in res_triplets.data
+
+
 # 6. Public exports
 __all__ = [
     "create_test_db",
@@ -486,4 +593,8 @@ __all__ = [
     "test_database_schema_evolution_and_backup_restore",
     "test_automated_memory_extraction",
     "test_conversation_repository_and_multi_turn_continuity",
+    "test_user_profile_and_preferences",
+    "test_knowledge_graph_triplets_and_bootstrapper",
+    "test_unified_memory_rag_and_graph_view",
+    "test_memory_graph_tool",
 ]

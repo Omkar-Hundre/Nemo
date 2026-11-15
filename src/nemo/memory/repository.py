@@ -2,6 +2,7 @@
 
 # 1. Standard library imports
 from pathlib import Path
+from typing import Any
 
 # 2. Third-party imports
 from sqlalchemy import or_, select
@@ -17,6 +18,7 @@ from nemo.database.models import (
     ConversationMessage,
     MemoryItem,
     Project,
+    UserProfile,
 )
 
 # 4. Types, Protocols, Schemas
@@ -206,6 +208,88 @@ class MemoryRepository:
             item.status = "archived"
             await session.commit()
             return True
+
+    async def add_triplet(
+        self,
+        subject: str,
+        predicate: str,
+        obj: str,
+        content: str | None = None,
+        memory_type: str = "fact",
+        importance: float = 1.0,
+        scope: str = "global",
+        project_id: str | None = None,
+        metadata: dict | None = None,
+    ) -> MemoryItem:
+        """Add or update an explicit (subject, predicate, object) knowledge graph node."""
+        async with self.session_provider() as session:
+            stmt = select(MemoryItem).where(
+                MemoryItem.subject == subject,
+                MemoryItem.predicate == predicate,
+                MemoryItem.status == "active",
+            )
+            res = await session.execute(stmt)
+            existing = res.scalar_one_or_none()
+
+            text_content = content or f"{subject} {predicate.replace('_', ' ')} {obj}."
+            if existing:
+                existing.object = obj
+                existing.content = text_content
+                existing.importance = max(existing.importance, importance)
+                existing.type = memory_type
+                if metadata:
+                    existing.metadata_ = metadata
+                await session.commit()
+                await session.refresh(existing)
+                return existing
+
+            item = MemoryItem(
+                subject=subject,
+                predicate=predicate,
+                object=obj,
+                content=text_content,
+                type=memory_type,
+                importance=importance,
+                scope=scope,
+                project_id=project_id,
+                metadata_=metadata or {},
+                status="active",
+            )
+            session.add(item)
+            await session.commit()
+            await session.refresh(item)
+            return item
+
+    async def list_triplets(self, project_id: str | None = None) -> list[dict[str, Any]]:
+        """List all active knowledge graph triplets."""
+        async with self.session_provider() as session:
+            stmt = select(MemoryItem).where(
+                MemoryItem.status == "active",
+                MemoryItem.subject.isnot(None),
+                MemoryItem.predicate.isnot(None),
+            )
+            if project_id:
+                stmt = stmt.where(
+                    or_(
+                        MemoryItem.project_id == project_id,
+                        MemoryItem.scope == "global",
+                    )
+                )
+            stmt = stmt.order_by(MemoryItem.importance.desc(), MemoryItem.created_at.desc())
+            res = await session.execute(stmt)
+            items = res.scalars().all()
+            return [
+                {
+                    "id": m.id,
+                    "subject": m.subject,
+                    "predicate": m.predicate,
+                    "object": m.object,
+                    "content": m.content,
+                    "type": m.type,
+                    "importance": m.importance,
+                }
+                for m in items
+            ]
 
 
 class ProjectRepository:
@@ -438,7 +522,86 @@ class TaskRepository:
             res = await session.execute(stmt)
             return list(res.scalars().all())
 
+    async def search_tasks(self, query: str, limit: int = 15) -> list[AgentTask]:
+        """Search historical agent tasks by keyword or token."""
+        raw_tokens = [t.strip(".,!?:;\"'()[]{}") for t in query.lower().split()]
+        tokens = [t for t in raw_tokens if len(t) >= 3 and t not in COMMON_STOPWORDS]
+        if not tokens:
+            return await self.list_tasks(limit=limit)
+
+        async with self.session_provider() as session:
+            conditions = [AgentTask.objective.ilike(f"%{tok}%") for tok in tokens]
+            stmt = (
+                select(AgentTask)
+                .where(or_(*conditions))
+                .order_by(AgentTask.created_at.desc())
+                .limit(limit)
+            )
+            res = await session.execute(stmt)
+            return list(res.scalars().all())
+
+
+class UserProfileRepository:
+    """Persistence and retrieval of developer profile, habits, and preferences."""
+
+    def __init__(self, session_provider=get_db_session) -> None:
+        self.session_provider = session_provider
+
+    async def get_or_create_profile(self, name: str = "Omkar") -> UserProfile:
+        """Retrieve existing developer profile or initialize with sensible defaults."""
+        async with self.session_provider() as session:
+            stmt = select(UserProfile).limit(1)
+            res = await session.execute(stmt)
+            profile = res.scalar_one_or_none()
+            if profile:
+                return profile
+
+            profile = UserProfile(
+                name=name,
+                preferences={
+                    "browser": "Brave",
+                    "ide": "Antigravity IDE",
+                    "os": "Windows",
+                    "python_stack": ["Python 3.12", "FastAPI", "UV", "Rich", "PySide6"],
+                    "design_style": "minimal, developer-first, zero AI fluff",
+                    "music": "https://music.youtube.com",
+                    "productivity_mode": "Brave YouTube Music + Antigravity IDE",
+                },
+                timezone="Asia/Kolkata",
+            )
+            session.add(profile)
+            await session.commit()
+            await session.refresh(profile)
+            return profile
+
+    async def update_preferences(self, preferences: dict[str, Any]) -> UserProfile:
+        """Update developer preferences dictionary."""
+        profile = await self.get_or_create_profile()
+        async with self.session_provider() as session:
+            stmt = select(UserProfile).where(UserProfile.id == profile.id)
+            res = await session.execute(stmt)
+            p = res.scalar_one()
+            updated_prefs = dict(p.preferences or {})
+            updated_prefs.update(preferences)
+            p.preferences = updated_prefs
+            await session.commit()
+            await session.refresh(p)
+            return p
+
+    async def get_profile(self) -> UserProfile | None:
+        """Retrieve current developer profile."""
+        async with self.session_provider() as session:
+            stmt = select(UserProfile).limit(1)
+            res = await session.execute(stmt)
+            return res.scalar_one_or_none()
+
 
 # 6. Public exports
-__all__ = ["MemoryRepository", "ProjectRepository", "ConversationRepository", "TaskRepository"]
+__all__ = [
+    "MemoryRepository",
+    "ProjectRepository",
+    "ConversationRepository",
+    "TaskRepository",
+    "UserProfileRepository",
+]
 

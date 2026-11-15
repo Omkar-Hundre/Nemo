@@ -7,7 +7,16 @@
 # (None)
 
 # 3. Local / internal imports
-from nemo.memory.repository import MemoryRepository, ProjectRepository
+from nemo.memory.backfill import KnowledgeGraphBootstrapper
+from nemo.memory.graph import MemoryGraph
+from nemo.memory.rag import UnifiedMemoryRAG
+from nemo.memory.repository import (
+    ConversationRepository,
+    MemoryRepository,
+    ProjectRepository,
+    TaskRepository,
+    UserProfileRepository,
+)
 
 # 4. Types, Protocols, Schemas
 # (None)
@@ -16,5 +25,13 @@ from nemo.memory.repository import MemoryRepository, ProjectRepository
 # (None)
 
 # 6. Public exports
-__all__ = ["MemoryRepository", "ProjectRepository"]
-
+__all__ = [
+    "ConversationRepository",
+    "KnowledgeGraphBootstrapper",
+    "MemoryGraph",
+    "MemoryRepository",
+    "ProjectRepository",
+    "TaskRepository",
+    "UnifiedMemoryRAG",
+    "UserProfileRepository",
+]

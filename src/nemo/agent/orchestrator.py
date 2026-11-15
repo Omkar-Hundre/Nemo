@@ -50,6 +50,7 @@ Core Principles & Rules:
    - For presentations: invoke `generate_presentation` (HTML slide deck with keyboard arrows).
    - For environment variables & missing secrets: invoke `inspect_env_config`.
    - For inspecting code modifications before declaring completion: invoke `git_diff`.
+   - For viewing the Knowledge Graph, Developer Identity, user preferences, or historical tasks from months ago: invoke `memory_graph` (action='view', 'profile', 'search_tasks').
    - For SQLite database introspection, listing tables, and running queries: invoke `database_inspector`. For Nemo's internal database, pass `path: '~/.nemo/nemo.db'`.
    - For testing REST/HTTP endpoints, webhooks, or API latency: invoke `api_tester`.
    - For live hardware metrics (CPU, RAM, disk), listening ports, or process management: invoke `system_inspector`.
@@ -180,6 +181,11 @@ class AgentOrchestrator:
         self.conv_repo = conv_repo or ConversationRepository()
         self.task_repo = task_repo or TaskRepository()
         self.verifier = verifier
+        try:
+            from nemo.ai.embeddings import NvidiaEmbeddingProvider
+            self.embed_provider = NvidiaEmbeddingProvider()
+        except Exception:
+            self.embed_provider = None
 
     async def run(
         self,
@@ -213,11 +219,18 @@ class AgentOrchestrator:
 
         verifier = self.verifier or OutcomeVerifier(workspace_root=cwd)
 
-        # Retrieve relevant memories via semantic search
-        memories = await self.memory.search_memories(objective, project_id=project_id, limit=8)
-        mem_str = ""
-        if memories:
-            mem_str = "Long-Term Project Memories:\n" + "\n".join(f"- {m.content}" for m in memories)
+        # Retrieve unified semantic memory (Developer Profile, Knowledge Graph, Historical Tasks, Facts)
+        try:
+            from nemo.memory.rag import UnifiedMemoryRAG
+            rag = UnifiedMemoryRAG(
+                embed_provider=getattr(self, "embed_provider", None),
+                mem_repo=self.memory,
+                task_repo=self.task_repo,
+            )
+            mem_str = await rag.retrieve_context(objective, project_id=project_id)
+        except Exception:
+            memories = await self.memory.search_memories(objective, project_id=project_id, limit=8)
+            mem_str = "Long-Term Project Memories:\n" + "\n".join(f"- {m.content}" for m in memories) if memories else ""
 
         # Context continuity across multi-turn interactions
         context_mgr = SessionContextManager()

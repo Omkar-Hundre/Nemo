@@ -31,6 +31,7 @@ from nemo.tools.builtin import (
     LaunchBackgroundProcessTool,
     ListDirectoryTool,
     ManageBackgroundProcessTool,
+    MemoryGraphTool,
     MemoryRecallTool,
     OpenBrowserTool,
     PortManagerTool,
@@ -100,6 +101,7 @@ class ToolRegistry:
         self.register(DocumentGeneratorTool())
         self.register(PresentationGeneratorTool())
         self.register(MemoryRecallTool())
+        self.register(MemoryGraphTool())
         self.register(IDEOpenTool())
 
         # 5. Core Developer Beast Tools (Git, Database, API, System, Desktop, Research, GUI)

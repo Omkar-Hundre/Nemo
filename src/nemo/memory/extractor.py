@@ -61,11 +61,11 @@ class MemoryExtractor:
             f"Objective: {objective}\n\n"
             f"Tool Execution Summary: {json.dumps(obs_snippets)}\n\n"
             f"Outcome: {outcome[:1200]}\n\n"
-            "Task: Extract 1 to 3 durable technical facts, architectural decisions, project conventions, or ports learned from this execution.\n"
+            "Task: Extract 1 to 3 durable technical facts, architectural decisions, project conventions, or developer preferences learned from this execution.\n"
             "Do NOT extract transient status or trivial file paths. Only extract durable, long-term technical knowledge.\n"
             "Format: Output EXACTLY ONE JSON array of objects:\n"
             "[\n"
-            '  {"content": "<concise factual statement>", "type": "fact"|"decision", "importance": 1.0, "subject": "<topic>"}\n'
+            '  {"subject": "<Entity>", "predicate": "<relation>", "object": "<Target>", "content": "<concise factual statement>", "type": "fact"|"decision"|"preference", "importance": 1.0}\n'
             "]\n"
             "If no durable technical fact was established, output []."
         )
@@ -94,13 +94,15 @@ class MemoryExtractor:
                 if any(e.content.strip().lower() == content.lower() for e in existing):
                     continue
 
-                saved = await self.repo.add_memory(
+                saved = await self.repo.add_triplet(
+                    subject=str(item.get("subject") or "Project"),
+                    predicate=str(item.get("predicate") or "decision"),
+                    obj=str(item.get("object") or content[:40]),
                     content=content,
+                    memory_type=str(item.get("type", "fact")),
+                    importance=float(item.get("importance", 1.0)),
                     scope=scope,
                     project_id=project_id,
-                    memory_type=item.get("type", "fact"),
-                    subject=item.get("subject"),
-                    importance=float(item.get("importance", 1.0)),
                     metadata={"auto_extracted": True, "source_objective": objective[:100]},
                 )
                 persisted.append(saved)

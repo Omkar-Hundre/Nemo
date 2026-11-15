@@ -848,6 +848,67 @@ class MemoryRecallTool(BaseTool):
         return ToolResult(success=True, data={"query": query, "memories": formatted})
 
 
+class MemoryGraphTool(BaseTool):
+    """Inspects and visualizes the Knowledge Graph, Developer Profile, and historical milestones."""
+    name = "memory_graph"
+    description = (
+        "Inspect, visualize, or query the Knowledge Graph, Developer Profile (identity, preferences, stack), "
+        "and past task milestones. Use this whenever the user asks to see the database, memory graph, "
+        "or what Nemo knows about them."
+    )
+    risk_level = RiskLevel.L0
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["view", "profile", "triplets", "search_tasks"],
+                        "description": "Action to perform (default 'view').",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Optional search term for filtering entities or historical tasks.",
+                    },
+                },
+            },
+            risk_level=self.risk_level,
+        )
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        from nemo.memory.graph import MemoryGraph
+        from nemo.memory.rag import UnifiedMemoryRAG
+
+        action = str(arguments.get("action", "view")).lower()
+        query = str(arguments.get("query", ""))
+        project_id = context.get("project_id")
+
+        graph = MemoryGraph()
+        if action == "view":
+            ascii_graph = await graph.to_ascii_tree(project_id=project_id)
+            data = await graph.get_graph_data(project_id=project_id)
+            return ToolResult(success=True, data={"graph_display": ascii_graph, "summary": data})
+
+        elif action == "profile":
+            data = await graph.get_graph_data(project_id=project_id)
+            return ToolResult(success=True, data=data.get("profile", {}))
+
+        elif action == "search_tasks":
+            rag = UnifiedMemoryRAG()
+            tasks = await rag.search_historical_tasks(query or "project", limit=8)
+            return ToolResult(success=True, data={"query": query, "historical_tasks": tasks})
+
+        elif action == "triplets":
+            data = await graph.get_graph_data(project_id=project_id)
+            return ToolResult(success=True, data={"entities": data.get("entities", {})})
+
+        return ToolResult(success=False, error=f"Unknown action: '{action}'")
+
+
 class IDEOpenTool(BaseTool):
     """Opens workspace or specific file in Antigravity or VS Code."""
     name = "ide_open"
@@ -5963,6 +6024,7 @@ __all__ = [
     "ProductiveModeTool",
     "ListDirectoryTool",
     "MemoryRecallTool",
+    "MemoryGraphTool",
     "IDEOpenTool",
     "OpenBrowserTool",
     "ProjectEnvironmentTool",

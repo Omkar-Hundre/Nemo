@@ -388,6 +388,27 @@ def stop_session(
 
 
 # --- Memory Commands ---
+@memory_app.callback(invoke_without_command=True)
+def memory_main(ctx: typer.Context) -> None:
+    """Nemo Knowledge Graph, Developer Profile, and durable semantic memory."""
+    if ctx.invoked_subcommand is None:
+        memory_graph_cmd()
+
+
+@memory_app.command("graph")
+def memory_graph_cmd() -> None:
+    """Display visual Knowledge Graph, Developer Profile, and historical milestones."""
+    from nemo.memory.graph import MemoryGraph
+
+    async def _show():
+        await init_db()
+        graph = MemoryGraph()
+        panel = await graph.render_rich_panel()
+        console.print(panel)
+
+    asyncio.run(_show())
+
+
 @memory_app.command("init")
 def memory_init() -> None:
     """Initialize database tables for memory and projects."""
