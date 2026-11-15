@@ -1355,7 +1355,7 @@ def main() -> None:
     known_commands = {
         "chat", "setup", "version", "status", "doctor", "run", "daemon",
         "sessions", "memory", "project", "index", "ide", "worker", "task",
-        "history", "resume", "voice", "avatar", "undo", "productive",
+        "history", "resume", "voice", "avatar", "undo", "productive", "remote",
         "dependencies", "verify", "diagnose", "ask", "remember",
         "--help", "-h", "--version", "-v",
     }

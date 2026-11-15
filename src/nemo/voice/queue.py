@@ -43,7 +43,7 @@ class NemoTask:
 class IdempotentTaskQueue:
     """Manages concurrent task queues, semantic deduplication, and priority tiers."""
 
-    DEBOUNCE_WINDOW_SEC = 15.0
+    DEBOUNCE_WINDOW_SEC = 3.0
 
     def __init__(
         self,

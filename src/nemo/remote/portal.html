@@ -2,25 +2,27 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>NEMO Mobile Remote Controller</title>
-  <meta name="theme-color" content="#0d1117">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Nemo</title>
+  <meta name="theme-color" content="#09090b">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #090d16;
-      --card-bg: #121826;
-      --card-border: #1e293b;
-      --primary: #06b6d4;
-      --primary-hover: #0891b2;
-      --accent: #10b981;
-      --text: #f1f5f9;
-      --text-muted: #94a3b8;
+      --bg: #09090b;
+      --card-bg: #111114;
+      --card-hover: #15151a;
+      --border: #1f1f23;
+      --border-focus: #3f3f46;
+      --text: #f4f4f5;
+      --text-muted: #71717a;
+      --text-dim: #52525b;
+      --accent: #38bdf8;
+      --success: #10b981;
       --danger: #ef4444;
       --warning: #f59e0b;
-      --radius: 14px;
+      --radius: 12px;
     }
 
     * {
@@ -35,413 +37,358 @@
       background: var(--bg);
       color: var(--text);
       min-height: 100vh;
+      min-height: -webkit-fill-available;
       display: flex;
       flex-direction: column;
       overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
     }
 
-    header {
-      padding: 16px 20px;
+    /* Minimalist status line instead of heavy topbar */
+    .status-bar {
+      padding: calc(env(safe-area-inset-top, 16px) + 12px) 20px 8px 20px;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      border-bottom: 1px solid var(--card-border);
-      background: rgba(9, 13, 22, 0.85);
-      backdrop-filter: blur(12px);
-      position: sticky;
-      top: 0;
-      z-index: 100;
+      max-width: 680px;
+      margin: 0 auto;
+      width: 100%;
     }
 
-    .brand {
+    .brand-mark {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      font-weight: 500;
+      letter-spacing: -0.2px;
+      color: var(--text-muted);
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
     }
 
-    .brand-icon {
-      width: 32px;
-      height: 32px;
-      border-radius: 8px;
-      background: linear-gradient(135deg, #06b6d4, #3b82f6);
+    .status-indicator {
       display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: 700;
-      font-size: 16px;
-      color: #fff;
-    }
-
-    .brand-name {
-      font-weight: 700;
-      font-size: 1.1rem;
-      letter-spacing: -0.5px;
-    }
-
-    .badge-status {
-      display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 4px 10px;
-      border-radius: 20px;
-      font-size: 0.75rem;
-      font-weight: 600;
-      background: rgba(16, 185, 129, 0.12);
-      color: var(--accent);
-      border: 1px solid rgba(16, 185, 129, 0.25);
+      font-size: 0.72rem;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-dim);
     }
 
-    .dot {
-      width: 8px;
-      height: 8px;
+    .status-dot {
+      width: 6px;
+      height: 6px;
       border-radius: 50%;
-      background: currentColor;
+      background: var(--success);
+      transition: background 0.2s ease;
     }
 
-    .pulse {
-      animation: pulseAnim 1.8s infinite;
+    .status-dot.working {
+      background: var(--accent);
+      animation: pulse 1.5s infinite;
     }
 
-    @keyframes pulseAnim {
-      0% { opacity: 1; transform: scale(1); }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
       50% { opacity: 0.4; transform: scale(0.85); }
-      100% { opacity: 1; transform: scale(1); }
     }
 
+    /* Main conversation container */
     main {
       flex: 1;
-      padding: 20px 16px 120px 16px;
+      padding: 12px 16px 140px 16px;
       max-width: 680px;
       margin: 0 auto;
       width: 100%;
       display: flex;
       flex-direction: column;
-      gap: 20px;
+      gap: 16px;
     }
 
-    .hero-banner {
-      background: linear-gradient(180deg, #161e31 0%, #111726 100%);
-      border: 1px solid var(--card-border);
-      border-radius: var(--radius);
-      padding: 18px;
-      position: relative;
+    .empty-state {
+      text-align: center;
+      margin: auto 0;
+      padding: 60px 20px;
+      color: var(--text-dim);
+      font-size: 0.9rem;
+      font-weight: 400;
+      letter-spacing: -0.2px;
     }
 
-    .hero-banner h1 {
-      font-size: 1.15rem;
-      font-weight: 600;
-      margin-bottom: 6px;
-    }
-
-    .hero-banner p {
-      font-size: 0.85rem;
-      color: var(--text-muted);
-      line-height: 1.4;
-    }
-
-    .chips-section {
+    .task-feed {
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 14px;
     }
 
-    .chips-label {
-      font-size: 0.8rem;
-      text-transform: uppercase;
-      font-weight: 700;
-      letter-spacing: 0.5px;
-      color: var(--text-muted);
-    }
-
-    .chips-grid {
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
       display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
+      flex-direction: column;
+      gap: 10px;
+      transition: border-color 0.15s ease;
     }
 
-    .chip-btn {
-      background: #182234;
-      border: 1px solid #28354b;
-      color: #e2e8f0;
-      padding: 8px 12px;
-      border-radius: 20px;
-      font-size: 0.82rem;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all 0.2s ease;
-      text-align: left;
+    .card.running {
+      border-color: rgba(56, 189, 248, 0.4);
     }
 
-    .chip-btn:hover, .chip-btn:active {
-      background: #233149;
-      border-color: var(--primary);
-      color: #fff;
-    }
-
-    .history-header {
+    .card-top {
       display: flex;
       justify-content: space-between;
-      align-items: center;
-      margin-top: 10px;
-    }
-
-    .history-header h2 {
-      font-size: 0.95rem;
-      font-weight: 600;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-
-    .task-list {
-      display: flex;
-      flex-direction: column;
+      align-items: baseline;
       gap: 12px;
     }
 
-    .task-card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: var(--radius);
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      transition: border-color 0.2s;
+    .prompt-text {
+      font-size: 0.92rem;
+      font-weight: 500;
+      color: var(--text);
+      line-height: 1.4;
+      letter-spacing: -0.2px;
     }
 
-    .task-card.running {
-      border-color: var(--primary);
-      box-shadow: 0 0 16px rgba(6, 182, 212, 0.15);
-    }
-
-    .task-card.completed {
-      border-left: 4px solid var(--accent);
-    }
-
-    .task-card.failed {
-      border-left: 4px solid var(--danger);
-    }
-
-    .task-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 10px;
-    }
-
-    .task-prompt {
-      font-weight: 600;
-      font-size: 0.95rem;
-      color: #fff;
-      line-height: 1.35;
-    }
-
-    .task-status-pill {
-      font-size: 0.72rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      padding: 3px 8px;
-      border-radius: 6px;
+    .time-badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      color: var(--text-dim);
       white-space: nowrap;
     }
 
-    .status-pending {
-      background: rgba(245, 158, 11, 0.15);
-      color: var(--warning);
-    }
-
-    .status-running {
-      background: rgba(6, 182, 212, 0.2);
-      color: var(--primary);
-    }
-
-    .status-completed {
-      background: rgba(16, 185, 129, 0.15);
-      color: var(--accent);
-    }
-
-    .status-failed {
-      background: rgba(239, 68, 68, 0.15);
-      color: var(--danger);
-    }
-
-    .task-result {
-      background: #090e1a;
+    .result-box {
+      font-size: 0.86rem;
+      line-height: 1.55;
+      color: #d4d4d8;
+      background: #000000;
+      border: 1px solid #18181b;
       border-radius: 8px;
-      padding: 12px;
-      font-size: 0.85rem;
-      color: #cbd5e1;
-      line-height: 1.5;
+      padding: 12px 14px;
       white-space: pre-wrap;
-      font-family: 'Inter', sans-serif;
-      max-height: 350px;
-      overflow-y: auto;
-      border: 1px solid #1a2233;
+      word-break: break-word;
+      position: relative;
     }
 
-    .task-time {
-      font-size: 0.72rem;
-      color: var(--text-muted);
-      align-self: flex-end;
+    .result-box.running {
+      color: var(--accent);
+      background: rgba(56, 189, 248, 0.04);
+      border-color: rgba(56, 189, 248, 0.15);
+      font-size: 0.82rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
     }
 
-    .floating-bar {
+    .result-box.pending {
+      color: var(--warning);
+      background: rgba(245, 158, 11, 0.04);
+      border-color: rgba(245, 158, 11, 0.15);
+      font-size: 0.82rem;
+    }
+
+    .result-box.failed {
+      color: var(--danger);
+      background: rgba(239, 68, 68, 0.04);
+      border-color: rgba(239, 68, 68, 0.15);
+      font-size: 0.82rem;
+    }
+
+    .copy-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: #18181b;
+      border: 1px solid #27272a;
+      color: var(--text-dim);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 0.68rem;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer;
+      opacity: 0.6;
+      transition: all 0.15s ease;
+    }
+
+    .copy-btn:hover, .copy-btn:active {
+      opacity: 1;
+      color: var(--text);
+      background: #27272a;
+    }
+
+    /* Fixed bottom container */
+    .bottom-area {
       position: fixed;
       bottom: 0;
       left: 0;
       right: 0;
-      padding: 14px 16px env(safe-area-inset-bottom, 16px) 16px;
-      background: rgba(9, 13, 22, 0.95);
-      backdrop-filter: blur(16px);
-      border-top: 1px solid var(--card-border);
+      padding: 10px 16px calc(env(safe-area-inset-bottom, 16px) + 8px) 16px;
+      background: rgba(9, 9, 11, 0.85);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-top: 1px solid var(--border);
       z-index: 100;
       display: flex;
-      justify-content: center;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
     }
 
-    .input-container {
+    .chips-bar {
+      max-width: 680px;
+      width: 100%;
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+      padding: 2px 0;
+    }
+
+    .chips-bar::-webkit-scrollbar {
+      display: none;
+    }
+
+    .chip {
+      background: #141417;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 5px 11px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+    }
+
+    .chip:hover, .chip:active {
+      background: #1e1e24;
+      border-color: var(--border-focus);
+      color: var(--text);
+    }
+
+    .input-pill {
       max-width: 680px;
       width: 100%;
       display: flex;
       align-items: center;
-      gap: 8px;
-      background: #131b2e;
-      border: 1px solid #23314a;
-      border-radius: 30px;
-      padding: 6px 10px;
-      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+      gap: 6px;
+      background: #141417;
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      padding: 4px 6px 4px 12px;
+      transition: border-color 0.15s ease;
     }
 
-    .input-container:focus-within {
-      border-color: var(--primary);
+    .input-pill:focus-within {
+      border-color: var(--border-focus);
     }
 
-    .text-input {
+    .main-input {
       flex: 1;
       background: transparent;
       border: none;
       outline: none;
-      color: #fff;
-      font-size: 0.95rem;
-      padding: 6px 10px;
+      color: var(--text);
+      font-size: 0.92rem;
       font-family: inherit;
+      padding: 8px 4px;
     }
 
-    .btn-action {
+    .main-input::placeholder {
+      color: var(--text-dim);
+    }
+
+    .btn-icon {
       background: transparent;
       border: none;
-      width: 38px;
-      height: 38px;
+      width: 34px;
+      height: 34px;
       border-radius: 50%;
       display: flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      color: var(--text-muted);
-      transition: all 0.2s ease;
+      color: var(--text-dim);
+      transition: all 0.15s ease;
     }
 
-    .btn-action:hover, .btn-action:active {
-      color: #fff;
-      background: rgba(255, 255, 255, 0.1);
+    .btn-icon:hover, .btn-icon:active {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.06);
     }
 
     .btn-mic.recording {
-      color: #ef4444;
-      background: rgba(239, 68, 68, 0.15);
-      animation: pulseAnim 1s infinite;
+      color: var(--danger);
+      background: rgba(239, 68, 68, 0.12);
+      animation: pulse 1s infinite;
     }
 
     .btn-send {
-      background: var(--primary);
-      color: #fff;
+      background: var(--text);
+      color: var(--bg);
     }
 
     .btn-send:hover, .btn-send:active {
-      background: var(--primary-hover);
-    }
-
-    .empty-state {
-      text-align: center;
-      padding: 40px 20px;
-      color: var(--text-muted);
-      font-size: 0.9rem;
+      background: #ffffff;
+      color: #000000;
     }
   </style>
 </head>
 <body>
 
-  <header>
-    <div class="brand">
-      <div class="brand-icon">N</div>
-      <div class="brand-name">NEMO Remote</div>
+  <!-- Minimal status header -->
+  <div class="status-bar">
+    <div class="brand-mark">
+      <span>nemo</span>
     </div>
-    <div class="badge-status">
-      <span class="dot pulse"></span>
-      <span id="connStatus">Supabase Online</span>
+    <div class="status-indicator">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusLabel">ready</span>
     </div>
-  </header>
+  </div>
 
+  <!-- Messages stream -->
   <main>
-    <div class="hero-banner">
-      <h1>Phone Command Portal</h1>
-      <p>Send prompts, audio dictation, or workflows directly from your phone. Nemo executes on your Windows PC and returns the output here.</p>
-    </div>
-
-    <div class="chips-section">
-      <div class="chips-label">Quick Actions</div>
-      <div class="chips-grid">
-        <button class="chip-btn" onclick="sendPrompt('can you check recent posts in my placement group and tell me if i need to apply to some')">
-          🎓 Scan Placement Group
-        </button>
-        <button class="chip-btn" onclick="sendPrompt('go apply to those with my details and later inform me once it is done')">
-          🚀 Apply With My Details
-        </button>
-        <button class="chip-btn" onclick="sendPrompt('can you open goutams chat in whatsapp')">
-          💬 Open Gautam's Chat
-        </button>
-        <button class="chip-btn" onclick="sendPrompt('open WhatsApp and check Bund\'s chat')">
-          📱 Check Bundu's Chat
-        </button>
-        <button class="chip-btn" onclick="sendPrompt('what are you doing right now')">
-          ⚡ Status & Running Tasks
-        </button>
-      </div>
-    </div>
-
-    <div class="history-header">
-      <h2>Execution Feed</h2>
-      <button class="chip-btn" style="padding: 4px 8px; font-size: 0.75rem;" onclick="loadTasks()">↻ Refresh</button>
-    </div>
-
-    <div id="taskList" class="task-list">
-      <div class="empty-state">No remote tasks yet. Speak or type below to send your first command.</div>
+    <div id="taskFeed" class="task-feed">
+      <div class="empty-state">Send a command or tap mic to speak.</div>
     </div>
   </main>
 
-  <div class="floating-bar">
-    <div class="input-container">
-      <button class="btn-action btn-mic" id="micBtn" onclick="toggleMic()" title="Voice Dictation">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+  <!-- Bottom action pill -->
+  <div class="bottom-area">
+    <div class="chips-bar">
+      <button class="chip" onclick="sendPrompt('can you check recent posts in my placement group and tell me if i need to apply to some')">Placement scan</button>
+      <button class="chip" onclick="sendPrompt('go apply to those with my details and later inform me once it is done')">Apply with details</button>
+      <button class="chip" onclick="sendPrompt('open WhatsApp and check Bund\'s chat')">WhatsApp Bundu</button>
+      <button class="chip" onclick="sendPrompt('can you open goutams chat in whatsapp')">WhatsApp Gautam</button>
+      <button class="chip" onclick="sendPrompt('what are you doing right now')">Status</button>
+    </div>
+
+    <div class="input-pill">
+      <button class="btn-icon btn-mic" id="micBtn" onclick="toggleMic()" title="Voice Dictation">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
           <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
           <line x1="12" y1="19" x2="12" y2="23"></line>
           <line x1="8" y1="23" x2="16" y2="23"></line>
         </svg>
       </button>
-      <input type="text" class="text-input" id="promptInput" placeholder="Speak or type a command for Nemo..." onkeypress="if(event.key === 'Enter') submitPrompt()">
-      <button class="btn-action btn-send" id="sendBtn" onclick="submitPrompt()" title="Send">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-          <line x1="22" y1="2" x2="11" y2="13"></line>
-          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+
+      <input type="text" class="main-input" id="promptInput" placeholder="Command Nemo..." onkeypress="if(event.key === 'Enter') submitPrompt()">
+
+      <button class="btn-icon btn-send" id="sendBtn" onclick="submitPrompt()" title="Send">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="19" x2="12" y2="5"></line>
+          <polyline points="5 12 12 5 19 12"></polyline>
         </svg>
       </button>
     </div>
   </div>
 
   <script>
-    // Configuration for Supabase TableTalk Project
     const SUPABASE_URL = "https://jdrcwujxrtxcyahigbmi.supabase.co";
     const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpkcmN3dWp4cnR4Y3lhaGlnYm1pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyNjIxODAsImV4cCI6MjEwMDgzODE4MH0.siuTaRqaXE0zeZtGj-C3CcVfqa_kpSqcVYVaed6Ttss";
 
@@ -455,10 +402,9 @@
     let recognition = null;
     let isRecording = false;
 
-    // Initialize Web Speech API
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      recognition = new SpeechRecognition();
+      const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognition = new SpeechRec();
       recognition.continuous = false;
       recognition.interimResults = true;
       recognition.lang = 'en-US';
@@ -468,10 +414,8 @@
         document.getElementById('micBtn').classList.add('recording');
       };
 
-      recognition.onresult = (event) => {
-        const transcript = Array.from(event.results)
-          .map(r => r[0].transcript)
-          .join('');
+      recognition.onresult = (e) => {
+        const transcript = Array.from(e.results).map(r => r[0].transcript).join('');
         document.getElementById('promptInput').value = transcript;
       };
 
@@ -488,7 +432,7 @@
 
     function toggleMic() {
       if (!recognition) {
-        alert("Speech recognition is not supported on this browser. Please type your command.");
+        alert("Microphone dictation is not supported on this browser.");
         return;
       }
       if (isRecording) {
@@ -504,6 +448,8 @@
       const prompt = text.trim();
       document.getElementById('promptInput').value = '';
 
+      updateStatusUI('working', 'sending...');
+
       try {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/nemo_remote_tasks`, {
           method: 'POST',
@@ -511,16 +457,14 @@
           body: JSON.stringify({
             prompt: prompt,
             status: 'pending',
-            device: /iPhone|iPad|Android/i.test(navigator.userAgent) ? 'phone' : 'mobile_web'
+            device: /iPhone|iPad|Android/i.test(navigator.userAgent) ? 'phone' : 'mobile'
           })
         });
         if (res.ok) {
           loadTasks();
-        } else {
-          console.error("Failed to post task:", await res.text());
         }
       } catch (err) {
-        console.error("Network error submitting task:", err);
+        console.error("Submit error:", err);
       }
     }
 
@@ -529,9 +473,16 @@
       sendPrompt(val);
     }
 
+    function copyResult(btn, text) {
+      navigator.clipboard.writeText(text);
+      const original = btn.innerText;
+      btn.innerText = "copied";
+      setTimeout(() => { btn.innerText = original; }, 1500);
+    }
+
     async function loadTasks() {
       try {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/nemo_remote_tasks?select=*&order=created_at.desc&limit=20`, {
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/nemo_remote_tasks?select=*&order=created_at.desc&limit=15`, {
           headers: {
             "apikey": SUPABASE_KEY,
             "Authorization": "Bearer " + SUPABASE_KEY
@@ -541,41 +492,65 @@
         const tasks = await res.json();
         renderTasks(tasks);
       } catch (err) {
-        console.debug("Fetch tasks error:", err);
+        console.debug("Poll error:", err);
+      }
+    }
+
+    function updateStatusUI(state, text) {
+      const dot = document.getElementById('statusDot');
+      const label = document.getElementById('statusLabel');
+      if (state === 'working') {
+        dot.className = 'status-dot working';
+        label.innerText = text || 'executing';
+      } else {
+        dot.className = 'status-dot';
+        label.innerText = text || 'ready';
       }
     }
 
     function renderTasks(tasks) {
-      const listEl = document.getElementById('taskList');
+      const feed = document.getElementById('taskFeed');
       if (!tasks || tasks.length === 0) {
-        listEl.innerHTML = '<div class="empty-state">No remote tasks yet. Speak or type below to send your first command.</div>';
+        feed.innerHTML = '<div class="empty-state">Send a command or tap mic to speak.</div>';
+        updateStatusUI('ready', 'ready');
         return;
       }
 
-      listEl.innerHTML = tasks.map(t => {
-        const statusClass = `status-${t.status || 'pending'}`;
-        const cardClass = `task-card ${t.status || ''}`;
-        const timeStr = new Date(t.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const hasActive = tasks.some(t => t.status === 'running' || t.status === 'pending');
+      if (hasActive) {
+        updateStatusUI('working', 'pc executing');
+      } else {
+        updateStatusUI('ready', 'connected');
+      }
 
-        let content = '';
+      feed.innerHTML = tasks.map(t => {
+        const timeStr = new Date(t.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const cardClass = `card ${t.status || ''}`;
+
+        let output = '';
         if (t.result) {
-          content = `<div class="task-result">${escapeHtml(t.result)}</div>`;
+          const rawEscaped = escapeHtml(t.result);
+          output = `
+            <div class="result-box">
+              <button class="copy-btn" onclick="copyResult(this, decodeURIComponent('${encodeURIComponent(t.result)}'))">copy</button>
+              ${rawEscaped}
+            </div>
+          `;
         } else if (t.error) {
-          content = `<div class="task-result" style="color: var(--danger);">${escapeHtml(t.error)}</div>`;
+          output = `<div class="result-box failed">${escapeHtml(t.error)}</div>`;
         } else if (t.status === 'running') {
-          content = `<div class="task-result" style="color: var(--primary);">⚡ Nemo is currently executing this command on Windows PC...</div>`;
+          output = `<div class="result-box running"><span>●</span> Running on Windows PC...</div>`;
         } else if (t.status === 'pending') {
-          content = `<div class="task-result" style="color: var(--warning);">⏳ Queued — Waiting for PC listener...</div>`;
+          output = `<div class="result-box pending">Queued — waiting for PC listener...</div>`;
         }
 
         return `
           <div class="${cardClass}">
-            <div class="task-header">
-              <div class="task-prompt">${escapeHtml(t.prompt)}</div>
-              <span class="task-status-pill ${statusClass}">${t.status}</span>
+            <div class="card-top">
+              <div class="prompt-text">${escapeHtml(t.prompt)}</div>
+              <div class="time-badge">${timeStr}</div>
             </div>
-            ${content}
-            <div class="task-time">${timeStr} • ${escapeHtml(t.device || 'mobile')}</div>
+            ${output}
           </div>
         `;
       }).join('');
@@ -591,7 +566,7 @@
         .replace(/'/g, "&#039;");
     }
 
-    // Auto load and poll every 2 seconds
+    // Initialize
     loadTasks();
     setInterval(loadTasks, 2000);
   </script>

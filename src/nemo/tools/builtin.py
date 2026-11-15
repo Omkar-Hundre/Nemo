@@ -5710,6 +5710,54 @@ class WindowsGuiTool(BaseTool):
                     data={"action": "send_antigravity_chat", "window": win.window_text() if win else "Antigravity", "prompt": prompt},
                 )
 
+            elif action == "send_antigravity_chat":
+                prompt = arguments.get("prompt") or arguments.get("keys") or arguments.get("text") or ""
+                if not prompt:
+                    return ToolResult(success=False, error="prompt parameter is required for 'send_antigravity_chat'.")
+
+                win = None
+                if target:
+                    win = self._find_window(target)
+                if not win:
+                    win = self._find_window("antigravity")
+                if not win:
+                    try:
+                        fg = win32gui.GetForegroundWindow() if win32gui else None
+                        if fg:
+                            fg_title = win32gui.GetWindowText(fg)
+                            win = self._find_window(fg_title)
+                    except Exception:
+                        pass
+
+                if win:
+                    win.set_focus()
+                    time.sleep(0.3)
+                    win.type_keys("^l")
+                    time.sleep(0.4)
+
+                try:
+                    import pyperclip
+                    pyperclip.copy(prompt)
+                    time.sleep(0.1)
+                    if win:
+                        win.type_keys("^v")
+                    elif Desktop:
+                        Desktop(backend="uia").type_keys("^v")
+                    time.sleep(0.2)
+                    if win:
+                        win.type_keys("{ENTER}")
+                    elif Desktop:
+                        Desktop(backend="uia").type_keys("{ENTER}")
+                except Exception:
+                    if win:
+                        win.type_keys(prompt, with_spaces=True)
+                        win.type_keys("{ENTER}")
+
+                return ToolResult(
+                    success=True,
+                    data={"action": "send_antigravity_chat", "window": win.window_text() if win else "Antigravity", "prompt": prompt},
+                )
+
             elif action == "type_keys":
                 keys = arguments.get("keys", "")
                 if not keys:

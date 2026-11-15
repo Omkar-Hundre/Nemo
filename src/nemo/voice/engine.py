@@ -19,9 +19,11 @@ class WhisperVoiceEngine:
     """Local, offline speech recognition using faster-whisper INT8."""
 
     WAKE_WORDS = [
-        "nemo", "hey nemo", "ok nemo", "hi nemo", "namo", "nemu",
-        "memo", "neemo", "kneemo", "niemo", "nimmo", "hello nemo",
-        "and nemo",
+        "hey nemo", "ok nemo", "hi nemo", "hello nemo", "and nemo",
+        "listen nemo", "yo nemo", "hey nimo", "hi nimo",
+        "nemo", "nimo", "namo", "nemu", "nimu", "neemo", "kneemo",
+        "niemo", "nimmo", "memo", "meemo", "demo", "neymo", "naymo",
+        "emo", "mimo", "mino",
     ]
 
     def __init__(self, model_size: str = "base.en", device: str = "cpu", compute_type: str = "int8") -> None:
@@ -46,7 +48,7 @@ class WhisperVoiceEngine:
             audio,
             beam_size=3,
             language="en",
-            initial_prompt="Nemo, Clovi, Omkar, WhatsApp, Bundu, Goutam, Gautam, Patil, placements, COSEM, DLMS, Python, Antigravity, FastAPI, Brave, GitHub, pytest, Windows, terminal",
+            initial_prompt="Nemo, Hey Nemo, Nemo assistant, Clovi, Omkar, WhatsApp, Bundu, Goutam, Gautam, Patil, placements, COSEM, DLMS, Python, Antigravity, FastAPI, Brave, GitHub, pytest, Windows, terminal",
             vad_filter=True,
             vad_parameters=dict(min_silence_duration_ms=400),
         )
@@ -65,17 +67,30 @@ class WhisperVoiceEngine:
             return False, ""
 
         clean = re.sub(r"[^\w\s]", "", raw_text.lower()).strip()
+        words = clean.split()
+        if not words:
+            return False, ""
 
+        # 1. Exact match on multi-word or single-word wake phrases
         for wake in self.WAKE_WORDS:
-            # Check prefix e.g. "hey nemo set a timer" or "nemo set a timer"
-            if clean.startswith(wake):
-                cmd = clean[len(wake):].strip()
+            wake_words = wake.split()
+            # Prefix check
+            if len(words) >= len(wake_words) and words[:len(wake_words)] == wake_words:
+                cmd = " ".join(words[len(wake_words):]).strip()
                 return True, cmd
-            # Check mid-sentence e.g. "could you please nemo set a timer"
+
+            # Mid-sentence check
             match = re.search(r"\b" + re.escape(wake) + r"\b\s*(.*)", clean)
             if match:
                 cmd = match.group(1).strip()
                 return True, cmd
+
+        # 2. Phonetic / fuzzy fallback for first word if within edit distance 1 of 'nemo'
+        first = words[0]
+        if len(first) in (3, 4, 5):
+            diffs = sum(1 for a, b in zip(first, "nemo") if a != b) + abs(len(first) - 4)
+            if diffs <= 1:
+                return True, " ".join(words[1:]).strip()
 
         return False, clean
 
