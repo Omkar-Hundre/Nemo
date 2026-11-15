@@ -365,25 +365,28 @@ class NemoVoiceService:
                         console.print(f"\n[bold magenta][PHONE TASK][/bold magenta] From phone: '[bold]{prompt}[/bold]'")
                         if self.panel:
                             self.panel.update_status("working", f"Phone: {prompt[:20]}")
-                        bridge.update_task_status(t_id, status="running")
 
                         try:
-                            orchestrator = AgentOrchestrator()
                             if self._loop and self._loop.is_running():
                                 fut = asyncio.run_coroutine_threadsafe(
-                                    orchestrator.run(objective=prompt, on_step=self._on_agent_step),
+                                    bridge.execute_task_async(t),
                                     self._loop,
                                 )
-                                state = fut.result(timeout=180.0)
+                                executed = fut.result(timeout=180.0)
                             else:
-                                state = asyncio.run(orchestrator.run(objective=prompt, on_step=self._on_agent_step))
+                                executed = bridge.execute_task_sync(t)
 
-                            ans = state.final_answer or "Success"
-                            bridge.update_task_status(t_id, status="completed", result=ans)
-                            console.print(f"[bold green][PHONE TASK DONE][/bold green] Result returned to phone.")
+                            res_preview = executed.get("result", "")
+                            # If result contains a base64 image, summarize in console instead of dumping 20k chars
+                            if "data:image" in res_preview:
+                                disp = res_preview.split("data:image")[0].strip() or "Screen snapshot delivered."
+                            else:
+                                disp = res_preview if len(res_preview) <= 120 else res_preview[:117] + "..."
+
+                            console.print(f"[bold green][PHONE TASK DONE][/bold green] {disp}")
                             if self.tts:
-                                speak_text = ans if len(ans) <= 80 else ans[:77] + "..."
-                                self.tts.speak(f"Completed phone command: {speak_text}")
+                                speak_text = "Delivered screen snapshot." if "data:image" in res_preview else (disp[:70] if len(disp) > 70 else disp)
+                                self.tts.speak(f"Phone task complete: {speak_text}")
                             if self.panel:
                                 self.panel.update_status("sleeping", "Phone Task Done ✓")
                         except Exception as ex:

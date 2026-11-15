@@ -111,7 +111,9 @@ class NemoRemoteBridge:
             return False
 
     async def execute_task_async(self, task: dict[str, Any]) -> dict[str, Any]:
-        """Execute a single remote task asynchronously via AgentOrchestrator."""
+        """Execute a single remote task asynchronously via fast-path or AgentOrchestrator."""
+        import base64
+        from pathlib import Path
         task_id = str(task.get("id"))
         prompt = str(task.get("prompt", "")).strip()
 
@@ -124,10 +126,31 @@ class NemoRemoteBridge:
         if self.on_task_start:
             self.on_task_start(task)
 
+        # Fast path 1: Instant Screen Snapshot (0.3s, zero LLM tokens, 100% untruncated)
+        prompt_lower = prompt.lower()
+        if any(w in prompt_lower for w in ("snapshot", "screenshot", "screen shot", "show me my screen", "show screen")):
+            from nemo.tools.builtin import capture_screen_optimized_jpeg_b64
+            b64 = capture_screen_optimized_jpeg_b64()
+            if b64:
+                final_answer = f"Live Desktop Snapshot\n\n![Desktop Screen](data:image/jpeg;base64,{b64})"
+                self.update_task_status(task_id, status="completed", result=final_answer)
+                task["status"] = "completed"
+                task["result"] = final_answer
+                if self.on_task_complete:
+                    self.on_task_complete(task)
+                return task
+
         try:
             orchestrator = AgentOrchestrator()
             state = await orchestrator.run(objective=prompt)
             final_answer = state.final_answer or "Task completed successfully."
+
+            # If a screenshot was captured during execution, ensure untruncated base64 image tag is attached
+            snap_file = Path.home() / ".nemo" / "snapshots" / "latest.jpg"
+            if snap_file.exists() and (time.time() - snap_file.stat().st_mtime) < 45.0:
+                if "data:image" not in final_answer:
+                    b64_data = base64.b64encode(snap_file.read_bytes()).decode("utf-8")
+                    final_answer = f"{final_answer}\n\n![Desktop Screenshot](data:image/jpeg;base64,{b64_data})"
 
             self.update_task_status(task_id, status="completed", result=final_answer)
             task["status"] = "completed"

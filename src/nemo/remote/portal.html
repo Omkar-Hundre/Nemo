@@ -631,19 +631,24 @@
 
         let output = '';
         if (t.result) {
-          // Check for embedded base64 image (markdown or raw)
-          const imgMatch = t.result.match(/!\[(.*?)\]\((data:image\/[a-zA-Z0-9+]+;base64,[A-Za-z0-9+/=]+)\)/) 
-                        || t.result.match(/(data:image\/[a-zA-Z0-9+]+;base64,[A-Za-z0-9+/=]+)/);
-
           let textPortion = t.result;
           let imageHtml = '';
 
-          if (imgMatch) {
-            const imgSrc = imgMatch[2] || imgMatch[1];
-            textPortion = t.result.replace(imgMatch[0], '').trim();
+          // Find embedded image URI (100% resilient against newlines and formatting)
+          const dataUriIdx = t.result.indexOf('data:image/');
+          if (dataUriIdx !== -1) {
+            let endIdx = t.result.indexOf(')', dataUriIdx);
+            if (endIdx === -1) endIdx = t.result.length;
+            const rawUri = t.result.substring(dataUriIdx, endIdx);
+            const cleanDataUri = rawUri.replace(/[\s"'\\]+/g, '');
+
+            textPortion = t.result.replace(/!\[[\s\S]*?\]\([\s\S]*?\)/g, '')
+                                  .replace(rawUri, '')
+                                  .trim();
+
             imageHtml = `
-              <div class="snapshot-wrap" onclick="openLightbox('${imgSrc}')">
-                <img src="${imgSrc}" class="snapshot-preview" alt="PC Screen Snapshot" loading="lazy" />
+              <div class="snapshot-wrap" onclick="openLightbox('${cleanDataUri}')">
+                <img src="${cleanDataUri}" class="snapshot-preview" alt="PC Screen Snapshot" loading="lazy" />
                 <div class="snapshot-overlay">Tap to enlarge • Live Windows Screen</div>
               </div>
             `;

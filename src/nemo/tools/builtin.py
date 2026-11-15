@@ -3271,6 +3271,24 @@ def capture_desktop_screenshot_base64() -> str | None:
     return None
 
 
+def capture_screen_optimized_jpeg_b64(max_width: int = 1280, quality: int = 65) -> str | None:
+    """Capture full desktop screen and return optimized JPEG base64 (~15KB) for mobile and remote transmission."""
+    png_b64 = capture_desktop_screenshot_base64()
+    if not png_b64:
+        return None
+    try:
+        raw_bytes = base64.b64decode(png_b64)
+        img = Image.open(io.BytesIO(raw_bytes))
+        if img.width > max_width:
+            new_h = int(max_width * img.height / img.width)
+            img = img.resize((max_width, new_h), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        img.convert("RGB").save(buf, format="JPEG", quality=quality)
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+    except Exception:
+        return png_b64
+
+
 class WindowsClockAutomator:
     """Automate the native Windows Clock app (Focus sessions, Timers, Alarms, Stopwatch) via UI Automation."""
 
@@ -4814,16 +4832,27 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                 )
 
             elif action in ("screen_snapshot", "capture_screen", "screenshot"):
-                b64 = capture_desktop_screenshot_base64()
+                b64 = capture_screen_optimized_jpeg_b64()
                 if not b64:
                     return ToolResult(success=False, error="Could not capture desktop screen. Ensure active interactive session.")
+
+                # Cache latest snapshot file locally
+                snap_dir = Path.home() / ".nemo" / "snapshots"
+                snap_dir.mkdir(parents=True, exist_ok=True)
+                snap_file = snap_dir / "latest.jpg"
+                try:
+                    snap_file.write_bytes(base64.b64decode(b64))
+                except Exception:
+                    pass
+
                 return ToolResult(
                     success=True,
                     data={
                         "action": "screen_snapshot",
                         "status": "captured",
+                        "file": str(snap_file),
                         "image_base64": b64,
-                        "markdown": f"![Desktop Screenshot](data:image/png;base64,{b64})",
+                        "markdown": f"![Desktop Screenshot](data:image/jpeg;base64,{b64})",
                         "note": "Desktop screen captured successfully.",
                     },
                 )
