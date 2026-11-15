@@ -10,6 +10,7 @@ import datetime
 import html
 import io
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -74,7 +75,7 @@ from nemo.security.policy import SecurityPolicy
 from nemo.tools.base import BaseTool, ToolDefinition
 
 # 4. Types, Protocols, Schemas
-# (None)
+logger = logging.getLogger(__name__)
 
 # 5. Core logic / classes / functions
 class CodebaseSummaryTool(BaseTool):
@@ -6005,11 +6006,11 @@ class ActiveFileInspectorTool(BaseTool):
 
 
 class MessagingDispatchTool(BaseTool):
-    """Automate messaging and file attachment dispatch via WhatsApp, Telegram, Slack, Discord, or Email."""
+    """Automate messaging, file attachments, and visual chat/group analysis via WhatsApp, Telegram, Slack, Discord, or Email."""
     name = "messaging_dispatch"
     description = (
-        "Send text messages and/or attach and send files directly via WhatsApp, Telegram, Slack, Discord, or Email. "
-        "Supports contact names, phone numbers, active file attachment, and scheduled delayed dispatch (e.g. 'at 1 PM')."
+        "Send messages, attach files, or read and analyze chat messages and group posts (e.g. placement updates, job links) "
+        "via WhatsApp, Telegram, Slack, Discord, or Email. Also supports opening/applying to links found in posts."
     )
     risk_level = RiskLevel.L2
 
@@ -6020,6 +6021,12 @@ class MessagingDispatchTool(BaseTool):
             parameters={
                 "type": "object",
                 "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["send", "read_chat", "analyze_posts", "apply"],
+                        "description": "Action to perform: 'send' (default to send message/file), 'read_chat' or 'analyze_posts' (read and visually analyze recent posts/messages in group or chat), or 'apply' (navigate to job application link).",
+                        "default": "send",
+                    },
                     "platform": {
                         "type": "string",
                         "enum": ["whatsapp", "telegram", "slack", "discord", "email"],
@@ -6028,12 +6035,20 @@ class MessagingDispatchTool(BaseTool):
                     },
                     "recipient": {
                         "type": "string",
-                        "description": "Recipient phone number (e.g. '+919876543210') or contact name (e.g. 'Rohan').",
+                        "description": "Recipient phone number (e.g. '+919876543210') or contact/group name (e.g. 'placements', 'Rohan', 'Bundu').",
                     },
                     "message": {
                         "type": "string",
                         "description": "Optional text message to send.",
                         "default": "",
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Specific question or criteria when reading/analyzing chats (e.g. 'check if I need to apply to any placement posts').",
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "Application link or URL (for 'apply' action).",
                     },
                     "file_path": {
                         "type": "string",
@@ -6454,15 +6469,87 @@ class MessagingDispatchTool(BaseTool):
         subprocess.Popen(f'start "" "{uri}"', shell=True)
         return {"success": True, "method": "mailto_uri"}
 
+    async def _analyze_chat_screen(self, platform_choice: str, recipient: str, query: str) -> dict[str, Any]:
+        """Navigate to chat/group, capture conversation view, and visually analyze using Vision AI."""
+        # 1. Open and focus the requested chat/group
+        if platform_choice == "whatsapp":
+            open_res = self._send_whatsapp(recipient, message="", file_path=None)
+            if not open_res.get("success"):
+                return {"success": False, "error": f"Failed to open {recipient}'s chat in WhatsApp: {open_res.get('error')}"}
+        elif platform_choice == "telegram":
+            self._send_telegram(recipient, message="", file_path=None)
+        time.sleep(1.8)  # Let conversation messages fully render on screen
+
+        # 2. Capture screenshot of desktop
+        b64 = capture_desktop_screenshot_base64()
+        if not b64:
+            return {"success": False, "error": "Could not capture screen for chat analysis. Ensure active interactive session."}
+
+        # 3. Vision-Language Analysis using Nvidia NIM
+        analysis_prompt = (
+            f"You are inspecting the active {platform_choice.title()} conversation with '{recipient}'.\n"
+            f"User request: {query or 'Check recent posts, summarize key updates, and identify any action items'}.\n\n"
+            "Instructions:\n"
+            "1. Read all visible messages and posts in this chat thread from top to bottom.\n"
+            "2. If this is a placement, job, or announcements group:\n"
+            "   - List each opportunity mentioned with Company Name, Role, Eligibility (Branch, CGPA, Batch), Deadline, and Application Link.\n"
+            "   - State clearly whether the user should apply and summarize the key reasons.\n"
+            "3. If this is a regular contact chat, summarize what was asked or discussed and what response is needed.\n"
+            "4. Be concise, direct, and well-structured."
+        )
+
+        try:
+            from nemo.ai.providers.nvidia import NvidiaNimProvider
+            provider = NvidiaNimProvider()
+            analysis_text = await provider.analyze_image(image_base64=b64, prompt=analysis_prompt)
+            return {
+                "success": True,
+                "platform": platform_choice,
+                "recipient": recipient,
+                "analysis": analysis_text,
+                "summary": analysis_text,
+            }
+        except Exception as ex:
+            return {"success": False, "error": f"Vision analysis of chat failed: {ex}"}
+
     async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
         if platform.system() != "Windows":
             return ToolResult(success=False, error="messaging_dispatch is only supported on Windows.")
 
+        action = str(arguments.get("action") or "send").lower().strip()
         platform_choice = str(arguments.get("platform") or "whatsapp").lower().strip()
         recipient = str(arguments.get("recipient") or "").strip()
         message = str(arguments.get("message") or "").strip()
+        query = str(arguments.get("query") or message or "").strip()
         file_arg = str(arguments.get("file_path") or "").strip()
         schedule_time = str(arguments.get("schedule_time") or "").strip()
+
+        # Handle Read & Analyze chat action
+        if action in ("read_chat", "analyze_posts", "read", "check_posts", "scan", "read_messages"):
+            res = await self._analyze_chat_screen(platform_choice, recipient or "active", query)
+            if not res.get("success"):
+                return ToolResult(success=False, error=res.get("error", "Failed to analyze chat."))
+            return ToolResult(success=True, data=res)
+
+        # Handle Job Application / Link Open action
+        if action == "apply":
+            target_url = str(arguments.get("url") or arguments.get("link") or "").strip()
+            if not target_url:
+                urls = re.findall(r"https?://[^\s)]+", query or message)
+                if urls:
+                    target_url = urls[0]
+            if not target_url:
+                return ToolResult(success=False, error="No application URL provided to apply.")
+
+            webbrowser.open(target_url)
+            return ToolResult(
+                success=True,
+                data={
+                    "status": "application_opened",
+                    "url": target_url,
+                    "summary": f"Opened application form at {target_url} in your browser. Ready for submission.",
+                },
+            )
 
         if not recipient:
             return ToolResult(success=False, error="Recipient phone number or contact name is required.")

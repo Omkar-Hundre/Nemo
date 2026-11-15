@@ -179,6 +179,36 @@ class TestMessagingDispatchTool:
             assert res.data.get("file_path") is None
 
     @pytest.mark.asyncio
+    async def test_messaging_read_and_analyze_chat(self):
+        tool = MessagingDispatchTool()
+        with patch.object(tool, "_send_whatsapp", return_value={"success": True}), \
+             patch("nemo.tools.builtin.capture_desktop_screenshot_base64", return_value="dummy_b64"), \
+             patch("nemo.ai.providers.nvidia.NvidiaNimProvider.analyze_image", return_value="Found 2 job postings: Google and Microsoft. You should apply to Google SDE."):
+            res = await tool.execute({
+                "action": "read_chat",
+                "platform": "whatsapp",
+                "recipient": "placements",
+                "query": "check recent posts and tell me if I need to apply",
+            }, context={})
+
+            assert res.success is True
+            assert "Google" in res.data["analysis"]
+            assert res.data["recipient"] == "placements"
+
+    @pytest.mark.asyncio
+    async def test_messaging_apply_action(self):
+        tool = MessagingDispatchTool()
+        with patch("webbrowser.open") as mock_open:
+            res = await tool.execute({
+                "action": "apply",
+                "url": "https://forms.gle/test1234",
+            }, context={})
+
+            assert res.success is True
+            assert res.data["status"] == "application_opened"
+            mock_open.assert_called_once_with("https://forms.gle/test1234")
+
+    @pytest.mark.asyncio
     async def test_scheduled_delayed_dispatch(self, tmp_path: Path):
         tool = MessagingDispatchTool()
         dummy_file = tmp_path / "doc.txt"
