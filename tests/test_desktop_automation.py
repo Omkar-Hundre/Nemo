@@ -72,6 +72,7 @@ class TestMessagingDispatchTool:
         dummy_file.write_text("PDF body")
 
         with patch("subprocess.Popen") as mock_popen, \
+             patch.object(tool, "_focus_app_window", return_value=12345), \
              patch.object(tool, "_copy_file_to_clipboard", return_value=True), \
              patch("pywinauto.keyboard.send_keys") as mock_keys:
             res = await tool.execute({
@@ -96,6 +97,10 @@ class TestMessagingDispatchTool:
         dummy_file.write_text("Invoice body")
 
         with patch("subprocess.Popen") as mock_popen, \
+             patch.object(tool, "_focus_app_window", return_value=12345), \
+             patch("win32gui.GetForegroundWindow", return_value=12345), \
+             patch("win32gui.GetWindowText", return_value="WhatsApp"), \
+             patch("win32gui.GetClassName", return_value="WinUIDesktopWin32WindowClass"), \
              patch.object(tool, "_copy_file_to_clipboard", return_value=True), \
              patch("pywinauto.keyboard.send_keys") as mock_keys:
             res = await tool.execute({
@@ -112,6 +117,59 @@ class TestMessagingDispatchTool:
             keys_calls = [c[0][0] for c in mock_keys.call_args_list]
             assert "^f" in keys_calls
             assert any("Rohan" in k for k in keys_calls)
+
+    @pytest.mark.asyncio
+    async def test_whatsapp_aborts_when_not_focused(self):
+        tool = MessagingDispatchTool()
+        with patch("subprocess.Popen"), \
+             patch.object(tool, "_focus_app_window", return_value=None), \
+             patch("pywinauto.keyboard.send_keys") as mock_keys:
+            res = await tool.execute({
+                "platform": "whatsapp",
+                "recipient": "Rohan",
+                "message": "Hello Rohan",
+            }, context={})
+
+            assert res.success is False
+            assert "could not be brought to the foreground" in res.error
+            mock_keys.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_whatsapp_strict_foreground_guard(self):
+        tool = MessagingDispatchTool()
+        with patch("subprocess.Popen"), \
+             patch.object(tool, "_focus_app_window", return_value=12345), \
+             patch("win32gui.GetForegroundWindow", return_value=99999), \
+             patch("win32gui.GetWindowText", return_value="Visual Studio Code - Antigravity"), \
+             patch("win32gui.GetClassName", return_value="Chrome_WidgetWin_1"), \
+             patch("pywinauto.keyboard.send_keys") as mock_keys:
+            res = await tool.execute({
+                "platform": "whatsapp",
+                "recipient": "Rohan",
+                "message": "Hello Rohan",
+            }, context={})
+
+            assert res.success is False
+            assert "Focus check failed" in res.error
+            assert "visual studio code" in res.error.lower()
+            mock_keys.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_messaging_dispatch_omitted_file_no_attachment(self):
+        tool = MessagingDispatchTool()
+        with patch("subprocess.Popen"), \
+             patch.object(ActiveFileInspectorTool, "get_selected_files", return_value=["C:\\docs\\secret.pdf"]), \
+             patch.object(tool, "_send_whatsapp", return_value={"success": True, "method": "uri"}) as mock_send:
+            res = await tool.execute({
+                "platform": "whatsapp",
+                "recipient": "+1234567890",
+                "message": "Just a text message",
+            }, context={})
+
+            assert res.success is True
+            # Verify file_path was NOT passed as an attachment
+            mock_send.assert_called_once_with("+1234567890", "Just a text message", None)
+            assert res.data.get("file_path") is None
 
     @pytest.mark.asyncio
     async def test_scheduled_delayed_dispatch(self, tmp_path: Path):

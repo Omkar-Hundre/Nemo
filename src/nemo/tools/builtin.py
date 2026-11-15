@@ -6093,6 +6093,96 @@ class MessagingDispatchTool(BaseTool):
         except Exception:
             return False
 
+    @staticmethod
+    def _focus_app_window(target_keyword: str, max_wait: float = 6.0) -> int | None:
+        """Find window matching keyword, force it to foreground, and verify active focus."""
+        import ctypes
+        import win32gui
+        import win32con
+        import win32process
+
+        user32 = ctypes.windll.user32
+        h_desk = None
+        try:
+            h_desk = user32.OpenDesktopW("Default", 0, False, 0x10000000)
+            if not h_desk:
+                h_desk = user32.OpenDesktopW("Default", 0, False, 0x0040 | 0x0001 | 0x0002)
+            if h_desk:
+                user32.SetThreadDesktop(h_desk)
+        except Exception:
+            h_desk = None
+
+        start_time = time.time()
+        target_hwnd = None
+
+        while (time.time() - start_time) < max_wait:
+            found_hwnds: list[int] = []
+
+            def _enum_cb(hwnd, _):
+                if win32gui.IsWindowVisible(hwnd):
+                    title = win32gui.GetWindowText(hwnd).strip()
+                    cname = win32gui.GetClassName(hwnd).lower()
+                    if target_keyword.lower() in title.lower() or target_keyword.lower() in cname:
+                        found_hwnds.append(hwnd)
+
+            try:
+                if h_desk:
+                    win32gui.EnumDesktopWindows(h_desk, _enum_cb, None)
+                else:
+                    win32gui.EnumWindows(_enum_cb, None)
+            except Exception:
+                pass
+
+            if found_hwnds:
+                target_hwnd = found_hwnds[0]
+                break
+
+            time.sleep(0.3)
+
+        if not target_hwnd:
+            return None
+
+        # Force window to foreground using AttachThreadInput trick
+        try:
+            if win32gui.IsIconic(target_hwnd):
+                win32gui.ShowWindow(target_hwnd, win32con.SW_RESTORE)
+            else:
+                win32gui.ShowWindow(target_hwnd, win32con.SW_SHOW)
+
+            fore_hwnd = win32gui.GetForegroundWindow()
+            if fore_hwnd != target_hwnd:
+                fore_tid, _ = win32process.GetWindowThreadProcessId(fore_hwnd)
+                cur_tid = ctypes.windll.kernel32.GetCurrentThreadId()
+                target_tid, _ = win32process.GetWindowThreadProcessId(target_hwnd)
+
+                try:
+                    user32.AttachThreadInput(cur_tid, target_tid, True)
+                    if fore_tid:
+                        user32.AttachThreadInput(fore_tid, target_tid, True)
+                    user32.SetForegroundWindow(target_hwnd)
+                    user32.BringWindowToTop(target_hwnd)
+                    user32.SetFocus(target_hwnd)
+                finally:
+                    user32.AttachThreadInput(cur_tid, target_tid, False)
+                    if fore_tid:
+                        user32.AttachThreadInput(fore_tid, target_tid, False)
+        except Exception:
+            pass
+
+        for _ in range(15):
+            cur_fore = win32gui.GetForegroundWindow()
+            if cur_fore:
+                try:
+                    cur_title = win32gui.GetWindowText(cur_fore).lower()
+                    cur_class = win32gui.GetClassName(cur_fore).lower()
+                    if cur_fore == target_hwnd or target_keyword.lower() in cur_title or target_keyword.lower() in cur_class:
+                        return cur_fore
+                except Exception:
+                    pass
+            time.sleep(0.1)
+
+        return target_hwnd
+
     def _send_whatsapp(self, recipient: str, message: str, file_path: Path | None) -> dict[str, Any]:
         """Dispatch via WhatsApp Desktop or URI protocol."""
         clean_num = re.sub(r"[^\d+]", "", recipient)
@@ -6106,14 +6196,35 @@ class MessagingDispatchTool(BaseTool):
             if encoded_msg:
                 uri += f"&text={encoded_msg}"
             subprocess.Popen(f'start "" "{uri}"', shell=True)
-            time.sleep(1.5)
+            self._focus_app_window("whatsapp", max_wait=4.0)
         else:
+            # 1. Bring WhatsApp window to foreground
             subprocess.Popen('start "" "whatsapp:"', shell=True)
-            time.sleep(1.2)
+            focused = self._focus_app_window("whatsapp", max_wait=6.0)
+            if not focused:
+                return {"success": False, "error": "WhatsApp window could not be brought to the foreground. Make sure WhatsApp is installed and running."}
+
+            # 2. Strict Guard: Verify foreground window is actually WhatsApp before sending ANY keystrokes!
+            import win32gui
+            cur_fore = win32gui.GetForegroundWindow()
+            active_title = ""
+            active_class = ""
+            if cur_fore:
+                try:
+                    active_title = win32gui.GetWindowText(cur_fore).lower()
+                    active_class = win32gui.GetClassName(cur_fore).lower()
+                except Exception:
+                    pass
+            if "whatsapp" not in active_title and "whatsapp" not in active_class and "winuidesktopwin32windowclass" not in active_class:
+                return {"success": False, "error": f"Focus check failed: current active window is '{active_title}', not WhatsApp. Keystrokes aborted to protect active IDE."}
+
             try:
                 from pywinauto import keyboard
-                keyboard.send_keys("^f")
                 time.sleep(0.4)
+                # Ctrl+F to search
+                keyboard.send_keys("^f")
+                time.sleep(0.5)
+                # Type recipient contact name and hit Enter
                 keyboard.send_keys(f"{recipient}{{ENTER}}")
                 time.sleep(0.8)
                 if message:
@@ -6122,7 +6233,9 @@ class MessagingDispatchTool(BaseTool):
             except Exception as e:
                 return {"success": False, "error": f"WhatsApp contact navigation failed: {e}"}
 
+        # Only attach file if file_path is explicitly provided
         if file_path and file_path.exists():
+            self._focus_app_window("whatsapp", max_wait=2.0)
             self._copy_file_to_clipboard(file_path)
             time.sleep(0.5)
             try:
@@ -6140,7 +6253,7 @@ class MessagingDispatchTool(BaseTool):
         encoded_msg = quote(message or "")
         uri = f"tg://msg?text={encoded_msg}"
         subprocess.Popen(f'start "" "{uri}"', shell=True)
-        time.sleep(1.2)
+        self._focus_app_window("telegram", max_wait=4.0)
         if file_path and file_path.exists():
             self._copy_file_to_clipboard(file_path)
             time.sleep(0.5)
@@ -6156,7 +6269,7 @@ class MessagingDispatchTool(BaseTool):
     def _send_slack(self, recipient: str, message: str, file_path: Path | None) -> dict[str, Any]:
         """Dispatch via Slack Desktop."""
         subprocess.Popen('start "" "slack://"', shell=True)
-        time.sleep(1.2)
+        self._focus_app_window("slack", max_wait=4.0)
         if file_path and file_path.exists():
             self._copy_file_to_clipboard(file_path)
             time.sleep(0.5)
@@ -6171,6 +6284,7 @@ class MessagingDispatchTool(BaseTool):
 
     def _send_discord(self, recipient: str, message: str, file_path: Path | None) -> dict[str, Any]:
         """Dispatch via Discord Desktop."""
+        self._focus_app_window("discord", max_wait=4.0)
         if file_path and file_path.exists():
             self._copy_file_to_clipboard(file_path)
             time.sleep(0.5)
@@ -6195,20 +6309,20 @@ class MessagingDispatchTool(BaseTool):
         if platform.system() != "Windows":
             return ToolResult(success=False, error="messaging_dispatch is only supported on Windows.")
 
-        platform_choice = arguments.get("platform", "whatsapp").lower().strip()
-        recipient = arguments.get("recipient", "").strip()
-        message = arguments.get("message", "").strip()
-        file_arg = arguments.get("file_path", "").strip()
-        schedule_time = arguments.get("schedule_time", "").strip()
+        platform_choice = str(arguments.get("platform") or "whatsapp").lower().strip()
+        recipient = str(arguments.get("recipient") or "").strip()
+        message = str(arguments.get("message") or "").strip()
+        file_arg = str(arguments.get("file_path") or "").strip()
+        schedule_time = str(arguments.get("schedule_time") or "").strip()
 
         if not recipient:
             return ToolResult(success=False, error="Recipient phone number or contact name is required.")
 
-        # Resolve active file if requested or omitted
+        # Resolve active file ONLY if user explicitly asked for a file
         target_file: Path | None = None
-        if file_arg and file_arg.lower() not in ("active", "selected", "hovered", "none"):
+        if file_arg and file_arg.lower() not in ("active", "selected", "hovered", "none", ""):
             target_file = Path(file_arg)
-        elif file_arg.lower() in ("active", "selected", "hovered") or not file_arg:
+        elif file_arg and file_arg.lower() in ("active", "selected", "hovered"):
             active_files = ActiveFileInspectorTool.get_selected_files()
             if active_files:
                 target_file = Path(active_files[0])
