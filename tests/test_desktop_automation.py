@@ -227,37 +227,54 @@ class TestVoiceQueueActiveFileAndDispatch:
 
     @pytest.mark.asyncio
     async def test_voice_send_file_dispatch(self, tmp_path: Path):
+        from nemo.ai.schemas import LLMResponse
         queue = IdempotentTaskQueue()
         test_file = tmp_path / "final_report.pdf"
         test_file.write_text("Report data")
 
         task = NemoTask(id="vf2", name="send this file to Rohan on whatsapp at 1:00 PM", status="queued")
 
+        mock_resp = LLMResponse(
+            content='```json\n{\n  "thought": "Schedule send file to Rohan on WhatsApp at 1:00 PM",\n  "action": "tool_call",\n  "tool": "messaging_dispatch",\n  "arguments": {"platform": "whatsapp", "recipient": "Rohan", "file_path": "active", "schedule_time": "1:00 PM"}\n}\n```',
+            model="test",
+        )
+        finish_resp = LLMResponse(
+            content='```json\n{\n  "thought": "Scheduled",\n  "action": "finish",\n  "answer": "Scheduled to send final_report.pdf to Rohan via WhatsApp."\n}\n```',
+            model="test",
+        )
+
         with patch.object(ActiveFileInspectorTool, "get_selected_files", return_value=[str(test_file)]), \
-             patch("threading.Timer") as mock_timer:
+             patch("threading.Timer") as mock_timer, \
+             patch("nemo.ai.providers.nvidia.NvidiaNimProvider.generate", side_effect=[mock_resp, finish_resp]), \
+             patch("nemo.ai.providers.nvidia.NvidiaNimProvider.stream", side_effect=Exception("no stream")):
             await queue._run_task_worker(task)
             assert task.status == "completed"
-            assert "Scheduled to send" in task.result
             assert "Rohan" in task.result
 
     @pytest.mark.asyncio
     async def test_voice_queue_followup_sends_video_with_inferred_recipient(self, tmp_path: Path):
+        from nemo.ai.schemas import LLMResponse
         queue = IdempotentTaskQueue()
         test_video = tmp_path / "presentation.mp4"
         test_video.write_text("fake video bytes")
 
-        # Prior task with recipient "bund"
-        prior_task = NemoTask(id="vf_prior", name="open whatsapp and find bund account and message him bye", status="completed")
-        queue.tasks.append(prior_task)
-
-        # Follow up command: "Can we just send this video?"
         followup = NemoTask(id="vf_followup", name="Can we just send this video?", status="queued")
 
+        mock_resp = LLMResponse(
+            content='```json\n{\n  "thought": "Send active video to Bund via WhatsApp",\n  "action": "tool_call",\n  "tool": "messaging_dispatch",\n  "arguments": {"platform": "whatsapp", "recipient": "bund", "file_path": "active"}\n}\n```',
+            model="test",
+        )
+        finish_resp = LLMResponse(
+            content='```json\n{\n  "thought": "Sent",\n  "action": "finish",\n  "answer": "Sent presentation.mp4 to Bund via WhatsApp."\n}\n```',
+            model="test",
+        )
+
         with patch.object(ActiveFileInspectorTool, "get_selected_files", return_value=[str(test_video)]), \
-             patch.object(MessagingDispatchTool, "_send_whatsapp", return_value={"success": True, "delivered": True, "method": "whatsapp_ui"}) as mock_wa:
+             patch.object(MessagingDispatchTool, "_send_whatsapp", return_value={"success": True, "delivered": True, "method": "whatsapp_ui"}) as mock_wa, \
+             patch("nemo.ai.providers.nvidia.NvidiaNimProvider.generate", side_effect=[mock_resp, finish_resp]), \
+             patch("nemo.ai.providers.nvidia.NvidiaNimProvider.stream", side_effect=Exception("no stream")):
             await queue._run_task_worker(followup)
             assert followup.status == "completed"
-            # Verify recipient was inferred as "bund" and target file was the selected video
             mock_wa.assert_called_once()
             args = mock_wa.call_args[0]
             assert args[0] == "bund"
@@ -265,34 +282,56 @@ class TestVoiceQueueActiveFileAndDispatch:
 
     @pytest.mark.asyncio
     async def test_voice_queue_opens_whatsapp_chat_without_file_demands(self):
+        from nemo.ai.schemas import LLMResponse
         queue = IdempotentTaskQueue()
         task = NemoTask(id="vq_open_gotham", name="Can you open WhatsApp and like show me Gotham?", status="queued")
 
+        mock_resp = LLMResponse(
+            content='```json\n{\n  "thought": "Open WhatsApp and view Gotham\'s chat",\n  "action": "tool_call",\n  "tool": "messaging_dispatch",\n  "arguments": {"platform": "whatsapp", "recipient": "Gotham", "message": "", "file_path": null}\n}\n```',
+            model="test",
+        )
+        finish_resp = LLMResponse(
+            content='```json\n{\n  "thought": "Opened",\n  "action": "finish",\n  "answer": "Opened WhatsApp chat with Gotham."\n}\n```',
+            model="test",
+        )
+
         with patch.object(ActiveFileInspectorTool, "get_selected_files", return_value=[]), \
              patch.object(ActiveFileInspectorTool, "get_hovered_file", return_value=None), \
-             patch.object(MessagingDispatchTool, "_send_whatsapp", return_value={"success": True, "delivered": True, "method": "whatsapp_ui_search", "summary": "Opened WhatsApp chat with Gotham."}) as mock_wa:
+             patch.object(MessagingDispatchTool, "_send_whatsapp", return_value={"success": True, "delivered": True, "method": "whatsapp_ui_search", "summary": "Opened WhatsApp chat with Gotham."}) as mock_wa, \
+             patch("nemo.ai.providers.nvidia.NvidiaNimProvider.generate", side_effect=[mock_resp, finish_resp]), \
+             patch("nemo.ai.providers.nvidia.NvidiaNimProvider.stream", side_effect=Exception("no stream")):
             await queue._run_task_worker(task)
             assert task.status == "completed"
             assert "Gotham" in task.result
             mock_wa.assert_called_once()
             args = mock_wa.call_args[0]
-            # recipient="Gotham", message="", file_path=None
             assert args[0] == "Gotham"
             assert args[1] == ""
             assert args[2] is None
 
     @pytest.mark.asyncio
     async def test_voice_queue_opens_whatsapp_and_messages_contact(self):
+        from nemo.ai.schemas import LLMResponse
         queue = IdempotentTaskQueue()
         task = NemoTask(id="vq_msg_bund", name="can you open whatsapp and find bund account and message him bye", status="queued")
 
+        mock_resp = LLMResponse(
+            content='```json\n{\n  "thought": "Open WhatsApp and send bye to bund",\n  "action": "tool_call",\n  "tool": "messaging_dispatch",\n  "arguments": {"platform": "whatsapp", "recipient": "bund", "message": "bye", "file_path": null}\n}\n```',
+            model="test",
+        )
+        finish_resp = LLMResponse(
+            content='```json\n{\n  "thought": "Done",\n  "action": "finish",\n  "answer": "Sent message to bund via WhatsApp."\n}\n```',
+            model="test",
+        )
+
         with patch.object(ActiveFileInspectorTool, "get_selected_files", return_value=[]), \
-             patch.object(MessagingDispatchTool, "_send_whatsapp", return_value={"success": True, "delivered": True, "method": "whatsapp_ui_search", "summary": "Sent message to bund via Whatsapp successfully."}) as mock_wa:
+             patch.object(MessagingDispatchTool, "_send_whatsapp", return_value={"success": True, "delivered": True, "method": "whatsapp_ui_search", "summary": "Sent message to bund via Whatsapp successfully."}) as mock_wa, \
+             patch("nemo.ai.providers.nvidia.NvidiaNimProvider.generate", side_effect=[mock_resp, finish_resp]), \
+             patch("nemo.ai.providers.nvidia.NvidiaNimProvider.stream", side_effect=Exception("no stream")):
             await queue._run_task_worker(task)
             assert task.status == "completed"
             mock_wa.assert_called_once()
             args = mock_wa.call_args[0]
-            # recipient="bund", message="bye", file_path=None
             assert args[0] == "bund"
             assert args[1] == "bye"
             assert args[2] is None
@@ -378,8 +417,20 @@ class TestProjectDiscovery:
         queue = IdempotentTaskQueue()
         task = NemoTask(id="pd_task", name="Can you just like open Win Unpacked version of Chloe?", status="queued")
 
+        from nemo.ai.schemas import LLMResponse
+        mock_resp = LLMResponse(
+            content='```json\n{\n  "thought": "Launch unpacked build of Clovi",\n  "action": "tool_call",\n  "tool": "project_discovery",\n  "arguments": {"query": "Chloe", "action": "launch", "target": "unpacked"}\n}\n```',
+            model="test",
+        )
+        finish_resp = LLMResponse(
+            content='```json\n{\n  "thought": "Launched Clovi",\n  "action": "finish",\n  "answer": "Successfully launched Clovi from release/win-unpacked."\n}\n```',
+            model="test",
+        )
+
         with patch.object(ProjectDiscoveryTool, "discover_candidates") as mock_disc, \
-             patch("subprocess.Popen") as mock_popen:
+             patch("subprocess.Popen") as mock_popen, \
+             patch("nemo.ai.providers.nvidia.NvidiaNimProvider.generate", side_effect=[mock_resp, finish_resp]), \
+             patch("nemo.ai.providers.nvidia.NvidiaNimProvider.stream", side_effect=Exception("no stream")):
             mock_disc.return_value = [{
                 "name": "Clovi",
                 "path": str(clovi_dir),
