@@ -1572,15 +1572,18 @@
 
     async function loadTasks() {
       try {
-        // Cache-busting URL with _t=timestamp and cache: 'no-store' to guarantee fresh data without page reload
-        const url = `${SUPABASE_URL}/rest/v1/nemo_remote_tasks?order=created_at.desc&limit=50&_t=${Date.now()}`;
+        // Query tasks from Supabase (cache: 'no-store' ensures fresh data without invalid filter params)
+        const url = `${SUPABASE_URL}/rest/v1/nemo_remote_tasks?order=created_at.desc&limit=50`;
         const res = await fetch(url, {
           headers: HEADERS,
           cache: 'no-store'
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          console.warn("loadTasks response status:", res.status);
+          return;
+        }
         const tasks = await res.json();
-        tasks.reverse(); // Now in chronological order: oldest to newest
+        tasks.reverse(); // Chronological order: oldest to newest
         allTasks = tasks;
         renderChat(allTasks);
 
@@ -1595,6 +1598,9 @@
       }
     }
 
+    // Global image storage for lightbox
+    window.__taskImages = {};
+
     function renderChat(tasks) {
       const container = document.getElementById('chatFeed');
       if (!tasks || tasks.length === 0) {
@@ -1604,79 +1610,85 @@
       document.getElementById('emptyChatNotice').style.display = 'none';
 
       container.innerHTML = tasks.map(t => {
-        // Store result safely in global map to prevent any quote/apostrophe JS syntax errors
-        window.__taskResults[t.id] = t.result || '';
+        try {
+          // Store result safely in global map to prevent any quote/apostrophe JS syntax errors
+          window.__taskResults[t.id] = t.result || '';
 
-        const timeStr = new Date(t.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const timeStr = new Date(t.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-        // User Prompt Bubble (Aligned Right)
-        const userRow = `
-          <div class="msg-row user">
-            <div class="bubble">${escapeHtml(t.prompt)}</div>
-            <div class="msg-meta">${timeStr}</div>
-          </div>
-        `;
+          // User Prompt Bubble (Aligned Right)
+          const userRow = `
+            <div class="msg-row user">
+              <div class="bubble">${escapeHtml(t.prompt)}</div>
+              <div class="msg-meta">${timeStr}</div>
+            </div>
+          `;
 
-        // Assistant Result Bubble (Aligned Left)
-        let aiBubbleContent = '';
-        if (t.status === 'completed' && t.result) {
-          let textPortion = t.result || '';
-          let imageHtml = '';
+          // Assistant Result Bubble (Aligned Left)
+          let aiBubbleContent = '';
+          if (t.status === 'completed' && t.result) {
+            let textPortion = t.result || '';
+            let imageHtml = '';
 
-          // Match full data:image URI
-          const imgMatch = textPortion.match(/data:image\/[a-zA-Z]+;base64,[A-Za-z0-9+/=]+/);
-          if (imgMatch) {
-            const cleanDataUri = imgMatch[0];
-            textPortion = textPortion.replace(/!\[[^\]]*\]\([^\)]*\)/g, '')
-                                     .replace(/!\[[^\]]*\]\(/g, '')
-                                     .replace(cleanDataUri, '')
-                                     .replace(/\s*\)\s*/g, '')
-                                     .replace(/Live Desktop Snapshot/gi, '')
-                                     .trim();
+            // Match full data:image URI
+            const imgMatch = textPortion.match(/data:image\/[a-zA-Z]+;base64,[A-Za-z0-9+/=]+/);
+            if (imgMatch) {
+              const cleanDataUri = imgMatch[0];
+              window.__taskImages[t.id] = cleanDataUri;
+              textPortion = textPortion.replace(/!\[[^\]]*\]\([^\)]*\)/g, '')
+                                       .replace(/!\[[^\]]*\]\(/g, '')
+                                       .replace(cleanDataUri, '')
+                                       .replace(/\s*\)\s*/g, '')
+                                       .replace(/Live Desktop Snapshot/gi, '')
+                                       .trim();
 
-            imageHtml = `
-              <div class="chat-snapshot-wrap" onclick="openLightbox('${cleanDataUri}')">
-                <img src="${cleanDataUri}" class="chat-snapshot-img" alt="PC Screen" loading="lazy">
-                <div class="chat-snapshot-tag">Tap to expand • PC Screen</div>
+              imageHtml = `
+                <div class="chat-snapshot-wrap" onclick="openLightbox(window.__taskImages['${t.id}'])">
+                  <img src="${cleanDataUri}" class="chat-snapshot-img" alt="PC Screen" loading="lazy">
+                  <div class="chat-snapshot-tag">Tap to expand • PC Screen</div>
+                </div>
+              `;
+            }
+
+            const rawEscaped = escapeHtml(textPortion);
+            aiBubbleContent = `
+              <div class="bubble">
+                <button class="copy-inline-btn" onclick="copyResultSafe(this, '${t.id}')">copy</button>
+                ${imageHtml}
+                ${rawEscaped ? `<div>${rawEscaped}</div>` : ''}
               </div>
+              <div class="msg-meta">
+                <span>Nemo</span> • <span>${timeStr}</span>
+              </div>
+            `;
+          } else if (t.status === 'running') {
+            aiBubbleContent = `
+              <div class="bubble running">
+                <span class="live-dot-mini" style="background: var(--accent);"></span>
+                Executing on Windows PC...
+              </div>
+            `;
+          } else if (t.status === 'pending') {
+            aiBubbleContent = `
+              <div class="bubble pending">Queued — waiting for PC listener...</div>
+            `;
+          } else if (t.error) {
+            aiBubbleContent = `
+              <div class="bubble failed">${escapeHtml(t.error)}</div>
             `;
           }
 
-          const rawEscaped = escapeHtml(textPortion);
-          aiBubbleContent = `
-            <div class="bubble">
-              <button class="copy-inline-btn" onclick="copyResultSafe(this, '${t.id}')">copy</button>
-              ${imageHtml}
-              ${rawEscaped ? `<div>${rawEscaped}</div>` : ''}
+          const aiRow = aiBubbleContent ? `
+            <div class="msg-row assistant">
+              ${aiBubbleContent}
             </div>
-            <div class="msg-meta">
-              <span>Nemo</span> • <span>${timeStr}</span>
-            </div>
-          `;
-        } else if (t.status === 'running') {
-          aiBubbleContent = `
-            <div class="bubble running">
-              <span class="live-dot-mini" style="background: var(--accent);"></span>
-              Executing on Windows PC...
-            </div>
-          `;
-        } else if (t.status === 'pending') {
-          aiBubbleContent = `
-            <div class="bubble pending">Queued — waiting for PC listener...</div>
-          `;
-        } else if (t.error) {
-          aiBubbleContent = `
-            <div class="bubble failed">${escapeHtml(t.error)}</div>
-          `;
+          ` : '';
+
+          return userRow + aiRow;
+        } catch (taskErr) {
+          console.error("Error rendering task:", t, taskErr);
+          return '';
         }
-
-        const aiRow = aiBubbleContent ? `
-          <div class="msg-row assistant">
-            ${aiBubbleContent}
-          </div>
-        ` : '';
-
-        return userRow + aiRow;
       }).join('');
 
       // Auto scroll to bottom
