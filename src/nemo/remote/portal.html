@@ -44,7 +44,7 @@
       -webkit-font-smoothing: antialiased;
     }
 
-    /* Minimalist status line instead of heavy topbar */
+    /* Minimal status line instead of heavy topbar */
     .status-bar {
       padding: calc(env(safe-area-inset-top, 16px) + 12px) 20px 8px 20px;
       display: flex;
@@ -209,12 +209,94 @@
       cursor: pointer;
       opacity: 0.6;
       transition: all 0.15s ease;
+      z-index: 5;
     }
 
     .copy-btn:hover, .copy-btn:active {
       opacity: 1;
       color: var(--text);
       background: #27272a;
+    }
+
+    /* Screen snapshot preview card */
+    .snapshot-wrap {
+      position: relative;
+      border-radius: 8px;
+      overflow: hidden;
+      cursor: pointer;
+      margin-bottom: 8px;
+      border: 1px solid var(--border);
+      background: #000000;
+    }
+
+    .snapshot-preview {
+      width: 100%;
+      height: auto;
+      max-height: 280px;
+      object-fit: cover;
+      display: block;
+      transition: transform 0.2s ease;
+    }
+
+    .snapshot-wrap:hover .snapshot-preview {
+      transform: scale(1.01);
+    }
+
+    .snapshot-overlay {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 6px 10px;
+      font-size: 0.7rem;
+      font-family: 'JetBrains Mono', monospace;
+      color: #e4e4e7;
+      background: linear-gradient(180deg, transparent 0%, rgba(0,0,0,0.85) 100%);
+    }
+
+    /* Lightbox Modal */
+    .lightbox-modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.95);
+      z-index: 9999;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      cursor: zoom-out;
+    }
+
+    .lightbox-modal.active {
+      display: flex;
+    }
+
+    .lightbox-img {
+      max-width: 100%;
+      max-height: 90vh;
+      object-fit: contain;
+      border-radius: 8px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.9);
+    }
+
+    .lightbox-close {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background: #18181b;
+      border: 1px solid #27272a;
+      color: #fff;
+      border-radius: 50%;
+      width: 36px;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 1rem;
     }
 
     /* Fixed bottom container */
@@ -357,9 +439,17 @@
     </div>
   </main>
 
+  <!-- Fullscreen Lightbox Modal -->
+  <div id="lightbox" class="lightbox-modal" onclick="closeLightbox()">
+    <button class="lightbox-close" onclick="closeLightbox()">✕</button>
+    <img id="lightboxImg" class="lightbox-img" src="" alt="Screen Snapshot" />
+  </div>
+
   <!-- Bottom action pill -->
   <div class="bottom-area">
     <div class="chips-bar">
+      <button class="chip" onclick="sendPrompt('send me a snapshot of the screen')">Screen snapshot</button>
+      <button class="chip" onclick="sendPrompt('play some music from my music folder')">Play local music</button>
       <button class="chip" onclick="sendPrompt('can you check recent posts in my placement group and tell me if i need to apply to some')">Placement scan</button>
       <button class="chip" onclick="sendPrompt('go apply to those with my details and later inform me once it is done')">Apply with details</button>
       <button class="chip" onclick="sendPrompt('open WhatsApp and check Bund\'s chat')">WhatsApp Bundu</button>
@@ -441,6 +531,18 @@
         document.getElementById('promptInput').value = '';
         recognition.start();
       }
+    }
+
+    function openLightbox(src) {
+      const modal = document.getElementById('lightbox');
+      const img = document.getElementById('lightboxImg');
+      img.src = src;
+      modal.classList.add('active');
+    }
+
+    function closeLightbox() {
+      const modal = document.getElementById('lightbox');
+      modal.classList.remove('active');
     }
 
     async function sendPrompt(text) {
@@ -529,11 +631,30 @@
 
         let output = '';
         if (t.result) {
-          const rawEscaped = escapeHtml(t.result);
+          // Check for embedded base64 image (markdown or raw)
+          const imgMatch = t.result.match(/!\[(.*?)\]\((data:image\/[a-zA-Z0-9+]+;base64,[A-Za-z0-9+/=]+)\)/) 
+                        || t.result.match(/(data:image\/[a-zA-Z0-9+]+;base64,[A-Za-z0-9+/=]+)/);
+
+          let textPortion = t.result;
+          let imageHtml = '';
+
+          if (imgMatch) {
+            const imgSrc = imgMatch[2] || imgMatch[1];
+            textPortion = t.result.replace(imgMatch[0], '').trim();
+            imageHtml = `
+              <div class="snapshot-wrap" onclick="openLightbox('${imgSrc}')">
+                <img src="${imgSrc}" class="snapshot-preview" alt="PC Screen Snapshot" loading="lazy" />
+                <div class="snapshot-overlay">Tap to enlarge • Live Windows Screen</div>
+              </div>
+            `;
+          }
+
+          const rawEscaped = escapeHtml(textPortion);
           output = `
             <div class="result-box">
               <button class="copy-btn" onclick="copyResult(this, decodeURIComponent('${encodeURIComponent(t.result)}'))">copy</button>
-              ${rawEscaped}
+              ${imageHtml}
+              ${rawEscaped ? `<div>${rawEscaped}</div>` : ''}
             </div>
           `;
         } else if (t.error) {

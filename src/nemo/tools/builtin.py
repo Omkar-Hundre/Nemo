@@ -4738,24 +4738,51 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                         target_file = Path(path_arg)
 
                 if not target_file:
-                    # Scan system music folders
+                    # Scan system music folders and user downloads
                     scan_dirs = [
+                        Path.home() / "Downloads" / "my music",
                         Path.home() / "Music",
                         Path.home() / "Downloads",
+                        Path("D:/Music"),
+                        Path("D:/Downloads"),
                         Path.home() / "Videos",
                         Path("C:/Windows/Media"),
                     ]
                     candidates = []
+                    AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".flac", ".wma", ".aac", ".ogg"}
+
                     for s_dir in scan_dirs:
-                        if s_dir.exists():
-                            for ext in ("*.mp3", "*.wav", "*.m4a", "*.flac", "*.wma"):
-                                candidates.extend(s_dir.glob(ext))
+                        if not s_dir.exists():
+                            continue
+                        try:
+                            if "music" in s_dir.name.lower():
+                                for f in s_dir.rglob("*"):
+                                    if f.is_file() and f.suffix.lower() in AUDIO_EXTS:
+                                        candidates.append(f)
+                            else:
+                                for f in s_dir.glob("*"):
+                                    if f.is_file() and f.suffix.lower() in AUDIO_EXTS:
+                                        candidates.append(f)
+                                    elif f.is_dir() and "music" in f.name.lower():
+                                        for sub in f.rglob("*"):
+                                            if sub.is_file() and sub.suffix.lower() in AUDIO_EXTS:
+                                                candidates.append(sub)
+                        except Exception:
+                            continue
+
+                    candidates = list(dict.fromkeys(candidates))
 
                     if search_query:
-                        sq = search_query.lower()
-                        matched = [c for c in candidates if sq in c.name.lower()]
-                        if matched:
-                            target_file = matched[0]
+                        sq_words = search_query.lower().split()
+                        scored = []
+                        for c in candidates:
+                            name_lower = c.name.lower()
+                            score = sum(1 for w in sq_words if w in name_lower)
+                            if score > 0:
+                                scored.append((score, c))
+                        if scored:
+                            scored.sort(key=lambda x: x[0], reverse=True)
+                            target_file = scored[0][1]
 
                     if not target_file and candidates:
                         target_file = candidates[0]
@@ -4783,6 +4810,21 @@ Remove-Job $soundJob -ErrorAction SilentlyContinue
                         "playback_engine": "Windows Media Player (WMPlayer.OCX)",
                         "status": "playing",
                         "note": f"Audio playback started for '{target_file.name}' at {volume}% volume.",
+                    },
+                )
+
+            elif action in ("screen_snapshot", "capture_screen", "screenshot"):
+                b64 = capture_desktop_screenshot_base64()
+                if not b64:
+                    return ToolResult(success=False, error="Could not capture desktop screen. Ensure active interactive session.")
+                return ToolResult(
+                    success=True,
+                    data={
+                        "action": "screen_snapshot",
+                        "status": "captured",
+                        "image_base64": b64,
+                        "markdown": f"![Desktop Screenshot](data:image/png;base64,{b64})",
+                        "note": "Desktop screen captured successfully.",
                     },
                 )
 
