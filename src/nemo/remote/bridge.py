@@ -110,33 +110,6 @@ class NemoRemoteBridge:
             logger.error("Failed to update task %s in Supabase: %s", task_id, exc)
             return False
 
-    def publish_pc_status(self, ws_port: int = 8765) -> bool:
-        """Publish PC local LAN IP and streamer status to Supabase for zero-config phone discovery."""
-        try:
-            from nemo.remote.streamer import get_local_ip
-            local_ip = get_local_ip()
-            endpoint = f"{self.supabase_url}/rest/v1/nemo_stream_signaling"
-            payload_data = {
-                "local_ip": local_ip,
-                "ws_url": f"ws://{local_ip}:{ws_port}/stream",
-                "http_snapshot": f"http://{local_ip}:{ws_port}/snapshot",
-                "status": "online",
-                "ts": time.time(),
-            }
-            body_dict = {
-                "session_id": "nemo-main",
-                "sender": "pc",
-                "type": "pc_status",
-                "payload": json.dumps(payload_data),
-            }
-            data = json.dumps(body_dict).encode("utf-8")
-            req = urllib.request.Request(endpoint, data=data, headers=self._headers(), method="POST")
-            with urllib.request.urlopen(req, timeout=5.0) as resp:
-                return 200 <= resp.status < 300
-        except Exception as exc:
-            logger.debug("Failed to publish pc_status: %s", exc)
-            return False
-
     async def execute_task_async(self, task: dict[str, Any]) -> dict[str, Any]:
         """Execute a single remote task asynchronously via fast-path or AgentOrchestrator."""
         import base64

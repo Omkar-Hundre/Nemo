@@ -967,17 +967,20 @@
         <div class="hud-right">
           <select class="stream-source-select" id="streamSourceSelect" onchange="changeStreamSource(this.value)">
             <option value="websocket">WebSocket (LAN)</option>
-            <option value="cloud">Cloud (Supabase)</option>
+            <option value="mjpeg">Direct Video (LAN)</option>
+            <option value="cloud">Cloud Snapshot</option>
             <option value="webrtc">Google Meet (WebRTC)</option>
           </select>
         </div>
       </div>
 
-      <!-- Video / Canvas Viewport -->
+      <!-- Video / Canvas / Image Viewport -->
       <div class="stream-viewport" id="viewportWrap">
+        <!-- Native MJPEG Stream Image -->
+        <img id="streamImg" alt="PC Screen" style="display: none; width: 100%; height: 100%; object-fit: contain;">
         <!-- WebRTC Video Element -->
         <video id="remoteVideo" autoplay playsinline muted></video>
-        <!-- Canvas for WebSocket / Cloud Frame Streaming -->
+        <!-- Canvas for WebSocket Stream -->
         <canvas id="streamCanvas"></canvas>
 
         <!-- Placeholder when disconnected -->
@@ -997,8 +1000,8 @@
               </svg>
               Reconnect
             </button>
-            <button class="btn-stream-action btn-stream-secondary" id="btnOpenBroadcaster" onclick="requestOpenBroadcasterOnPc()">
-              Open WebRTC on PC
+            <button class="btn-stream-action btn-stream-secondary" onclick="openSettings()">
+              ⚙️ Change IP
             </button>
           </div>
         </div>
@@ -1064,13 +1067,13 @@
       "Prefer": "return=representation"
     };
 
-    // State
+    // State (100% Private - IP stored strictly in phone localStorage, NEVER uploaded to cloud)
     let currentTheme = localStorage.getItem('nemo_theme') || 'light';
     let currentView = 'chat';
-    // Default to WebSocket (LAN) for immediate zero-config viewing with nemo voice
     let currentStreamSource = localStorage.getItem('nemo_stream_source') || 'websocket';
-    let detectedLanIp = '192.168.1.3';
-    let wsUrl = localStorage.getItem('nemo_ws_url') || `ws://${detectedLanIp}:8765/stream`;
+    let lanIp = localStorage.getItem('nemo_lan_ip') || '192.168.1.3';
+    let wsUrl = `ws://${lanIp}:8765/stream`;
+    let mjpegUrl = `http://${lanIp}:8765/live.mjpg`;
     let sessionId = localStorage.getItem('nemo_session_id') || 'nemo-main';
 
     // Global task result storage for safe copy buttons (no inline string/quote escaping issues)
@@ -1116,32 +1119,7 @@
     }
 
     // =========================================================
-    // PC STATUS & LAN IP AUTO-DISCOVERY
-    // =========================================================
-
-    async function fetchPcStatus() {
-      try {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/nemo_stream_signaling?type=eq.pc_status&order=created_at.desc&limit=1`, { headers: HEADERS });
-        if (!res.ok) return;
-        const rows = await res.json();
-        if (rows && rows.length > 0) {
-          const payload = JSON.parse(rows[0].payload);
-          if (payload && payload.local_ip) {
-            detectedLanIp = payload.local_ip;
-            const customSet = localStorage.getItem('nemo_user_custom_ip');
-            if (!customSet) {
-              wsUrl = payload.ws_url || `ws://${detectedLanIp}:8765/stream`;
-              document.getElementById('cfgWsUrl').placeholder = wsUrl;
-            }
-            document.getElementById('headerSubText').innerText = `PC Online (${detectedLanIp})`;
-            document.getElementById('cfgDetectedIpNote').innerText = `Auto-discovered laptop IP: ${detectedLanIp}`;
-          }
-        }
-      } catch (err) {}
-    }
-
-    // =========================================================
-    // REALTIME STREAMING ENGINES
+    // REALTIME STREAMING ENGINES (Direct Local LAN & WebRTC)
     // =========================================================
 
     function changeStreamSource(source) {
@@ -1157,12 +1135,15 @@
 
       document.getElementById('streamSourceSelect').value = source;
       document.getElementById('streamPlaceholder').style.display = 'flex';
+      document.getElementById('streamImg').style.display = 'none';
       document.getElementById('remoteVideo').style.display = 'none';
       document.getElementById('streamCanvas').style.display = 'none';
       document.getElementById('hudLiveTag').classList.add('connecting');
 
       if (source === 'websocket') {
         startWebSocketStream();
+      } else if (source === 'mjpeg') {
+        startMjpegStream();
       } else if (source === 'cloud') {
         startCloudStream();
       } else if (source === 'webrtc') {
@@ -1179,6 +1160,8 @@
         webSocket.close();
         webSocket = null;
       }
+      const streamImg = document.getElementById('streamImg');
+      if (streamImg) streamImg.src = '';
       if (cloudStreamTimer) {
         clearInterval(cloudStreamTimer);
         cloudStreamTimer = null;
@@ -1207,18 +1190,13 @@
       }, 1000);
     }
 
-    // Engine 1: Local High-Speed WebSocket Stream (Default for nemo voice)
+    // Engine 1: High-Speed WebSocket Screen Stream (Direct LAN)
     function startWebSocketStream() {
       document.getElementById('streamNoticeTitle').innerText = "Connecting to WebSocket...";
-      document.getElementById('streamNoticeBody').innerText = `Connecting to ${wsUrl}. (Ensure nemo voice is running on PC)`;
-
-      let normalizedUrl = wsUrl;
-      if (!normalizedUrl.startsWith('ws://') && !normalizedUrl.startsWith('wss://')) {
-        normalizedUrl = `ws://${normalizedUrl}:8765/stream`;
-      }
+      document.getElementById('streamNoticeBody').innerText = `Connecting to ws://${lanIp}:8765/stream (Ensure nemo voice is running on laptop)`;
 
       try {
-        webSocket = new WebSocket(normalizedUrl);
+        webSocket = new WebSocket(`ws://${lanIp}:8765/stream`);
         const canvas = document.getElementById('streamCanvas');
         const ctx = canvas.getContext('2d');
 
@@ -1248,39 +1226,61 @@
         };
 
         webSocket.onerror = () => {
-          document.getElementById('streamNoticeTitle').innerText = "WebSocket Offline";
-          document.getElementById('streamNoticeBody').innerText = `Could not connect to ${normalizedUrl}. If on cellular data, switch dropdown to 'Cloud (Supabase)'.`;
-          // Smart fallback: If on cellular data and cannot connect LAN, auto-switch to cloud stream
+          document.getElementById('streamNoticeTitle').innerText = "WebSocket Connecting...";
+          document.getElementById('streamNoticeBody').innerText = `Cannot reach ws://${lanIp}:8765. Trying Direct Video stream...`;
+          // Fallback to MJPEG direct video
           setTimeout(() => {
             if (!webSocket || webSocket.readyState !== WebSocket.OPEN) {
-              changeStreamSource('cloud');
+              changeStreamSource('mjpeg');
             }
-          }, 3500);
+          }, 2500);
         };
       } catch (e) {
-        document.getElementById('streamNoticeTitle').innerText = "WebSocket Error";
+        changeStreamSource('mjpeg');
       }
     }
 
-    // Engine 2: Cloud Live Snapshot Stream (Works on Cellular / Outside Network)
+    // Engine 2: Direct HTTP MJPEG Stream (Native Browser Video Rendering)
+    function startMjpegStream() {
+      document.getElementById('streamNoticeTitle').innerText = "Connecting Direct Video...";
+      document.getElementById('streamNoticeBody').innerText = `Connecting to http://${lanIp}:8765/live.mjpg`;
+
+      const streamImg = document.getElementById('streamImg');
+      streamImg.onload = () => {
+        document.getElementById('streamPlaceholder').style.display = 'none';
+        streamImg.style.display = 'block';
+        document.getElementById('hudLiveTag').classList.remove('connecting');
+        document.getElementById('hudStats').innerText = "Direct Stream LIVE (720p)";
+      };
+      streamImg.onerror = () => {
+        document.getElementById('streamNoticeTitle').innerText = "Direct Stream Offline";
+        document.getElementById('streamNoticeBody').innerText = `Could not reach ${lanIp}:8765. Make sure your phone is on the same Wi-Fi and 'nemo voice' is running.`;
+      };
+      streamImg.src = `http://${lanIp}:8765/live.mjpg?t=${Date.now()}`;
+    }
+
+    // Engine 3: Cloud Live Snapshot on Demand
     function startCloudStream() {
-      document.getElementById('streamNoticeTitle').innerText = "Connecting to Cloud Stream...";
-      document.getElementById('streamNoticeBody').innerText = "Streaming real-time 720p screen captures via Supabase.";
+      document.getElementById('streamNoticeTitle').innerText = "Requesting Screen Snapshot...";
+      document.getElementById('streamNoticeBody').innerText = "Sending snapshot command to PC via Supabase...";
+
+      sendPrompt("send me a snapshot of the screen");
+
       const canvas = document.getElementById('streamCanvas');
       const ctx = canvas.getContext('2d');
 
       const fetchCloudFrame = async () => {
         try {
-          const res = await fetch(`${SUPABASE_URL}/rest/v1/nemo_remote_tasks?prompt=ilike.*snapshot*&status=eq.completed&order=updated_at.desc&limit=1`, { headers: HEADERS });
+          const res = await fetch(`${SUPABASE_URL}/rest/v1/nemo_remote_tasks?prompt=ilike.*snapshot*&status=eq.completed&order=created_at.desc&limit=1`, { headers: HEADERS });
           if (!res.ok) return;
           const rows = await res.json();
           if (rows.length && rows[0].result) {
             const match = rows[0].result.match(/data:image\/[a-zA-Z]+;base64,([A-Za-z0-9+/=]+)/);
             if (match && match[0]) {
-              frameCount++;
               document.getElementById('streamPlaceholder').style.display = 'none';
               canvas.style.display = 'block';
               document.getElementById('hudLiveTag').classList.remove('connecting');
+              document.getElementById('hudStats').innerText = "Cloud Snapshot (Fresh)";
               const img = new Image();
               img.onload = () => {
                 canvas.width = img.width;
@@ -1294,7 +1294,7 @@
       };
 
       fetchCloudFrame();
-      cloudStreamTimer = setInterval(fetchCloudFrame, 1500);
+      cloudStreamTimer = setInterval(fetchCloudFrame, 2000);
     }
 
     // Engine 3: Google Meet WebRTC Technology
@@ -1570,7 +1570,7 @@
     }
 
     function openSettings() {
-      document.getElementById('cfgWsUrl').value = wsUrl;
+      document.getElementById('cfgWsUrl').value = lanIp;
       document.getElementById('cfgSessionId').value = sessionId;
       document.getElementById('settingsModal').classList.add('active');
     }
@@ -1582,9 +1582,10 @@
     function saveSettings() {
       const userVal = document.getElementById('cfgWsUrl').value.trim();
       if (userVal) {
-        wsUrl = userVal;
-        localStorage.setItem('nemo_ws_url', wsUrl);
-        localStorage.setItem('nemo_user_custom_ip', '1');
+        lanIp = userVal.replace(/^https?:\/\//, '').replace(/^wss?:\/\//, '').replace(/\/.*$/, '').replace(/:[0-9]+$/, '');
+        localStorage.setItem('nemo_lan_ip', lanIp);
+        wsUrl = `ws://${lanIp}:8765/stream`;
+        mjpegUrl = `http://${lanIp}:8765/live.mjpg`;
       }
       sessionId = document.getElementById('cfgSessionId').value.trim() || sessionId;
       localStorage.setItem('nemo_session_id', sessionId);
@@ -1648,10 +1649,8 @@
 
     // Initialize
     applyTheme(currentTheme);
-    fetchPcStatus();
     loadTasks();
     setInterval(loadTasks, 2000);
-    setInterval(fetchPcStatus, 15000);
   </script>
 </body>
 </html>

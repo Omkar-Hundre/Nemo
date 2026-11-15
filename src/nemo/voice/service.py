@@ -345,12 +345,12 @@ class NemoVoiceService:
             self.panel.update_status(pill_state, message)
 
     def _remote_worker_loop(self) -> None:
-        """Polls Supabase for tasks sent remotely from phone and serves screen stream."""
+        """Polls Supabase for tasks sent remotely from phone and serves local screen stream."""
         from nemo.agent.orchestrator import AgentOrchestrator
         from nemo.remote.bridge import NemoRemoteBridge
         from nemo.remote.streamer import start_streaming_server_thread, get_local_ip
 
-        # Automatically launch background WebSocket screen streamer on port 8765
+        # Automatically launch background screen streamer on port 8765 (Local LAN only - never published to cloud)
         try:
             start_streaming_server_thread(host="0.0.0.0", port=8765)
         except Exception:
@@ -358,25 +358,12 @@ class NemoVoiceService:
 
         bridge = NemoRemoteBridge(poll_interval=1.5)
         local_ip = get_local_ip()
-        try:
-            bridge.publish_pc_status(ws_port=8765)
-        except Exception:
-            pass
 
         console.print("[dim]📲 Remote Bridge Online: Listening for phone commands via Supabase.[/dim]")
-        console.print(f"[dim]🖥️ Live Screen Stream: ws://{local_ip}:8765/stream (Mobile Ready)[/dim]")
-
-        last_status_pub = time.time()
+        console.print(f"[bold cyan]🖥️ Local Screen Stream:[/bold cyan] [green]http://{local_ip}:8765/live.mjpg[/green] or [green]ws://{local_ip}:8765/stream[/green]")
 
         while not self._stop_event.is_set():
             try:
-                # Refresh PC heartbeat & LAN IP every 30 seconds
-                if time.time() - last_status_pub > 30.0:
-                    try:
-                        bridge.publish_pc_status(ws_port=8765)
-                    except Exception:
-                        pass
-                    last_status_pub = time.time()
 
                 tasks = bridge.fetch_pending_tasks(limit=1)
                 if tasks:

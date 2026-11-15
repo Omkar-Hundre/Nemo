@@ -1,7 +1,8 @@
-"""High-performance WebSocket Screen Streaming Server for Nemo.
+"""High-performance Screen Streaming Server for Nemo.
 
 Enables ultra-low-latency (30-60ms) 720p live screen streaming from Windows PC
-to any mobile phone browser over WebSocket (LAN or Tunneled).
+to any mobile phone browser over WebSocket and HTTP MJPEG (LAN direct).
+Zero cloud exposure: All screen video frames stream strictly peer-to-peer over local network.
 """
 
 import asyncio
@@ -14,8 +15,9 @@ import threading
 import time
 from typing import Any, Set
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 import uvicorn
 
 from nemo.tools.builtin import capture_screen_optimized_jpeg_b64
@@ -39,7 +41,6 @@ def get_local_ip() -> str:
     """Detect the PC's primary LAN IP address (192.168.x.x)."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        # Doesn't actually send data, just identifies the interface used to reach internet
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
     except Exception:
@@ -60,12 +61,36 @@ async def health_check():
     }
 
 
-@app.get("/snapshot")
-async def get_snapshot():
-    b64 = capture_screen_optimized_jpeg_b64(max_width=1280, quality=70)
+@app.get("/frame.jpg")
+async def get_raw_frame():
+    """Return single fresh 720p JPEG frame directly."""
+    b64 = await asyncio.to_thread(capture_screen_optimized_jpeg_b64, 1280, 65)
     if not b64:
-        return {"error": "Failed to capture snapshot"}
-    return {"status": "ok", "image_base64": b64, "timestamp": time.time()}
+        return Response(status_code=503)
+    raw_bytes = base64.b64decode(b64)
+    return Response(content=raw_bytes, media_type="image/jpeg")
+
+
+@app.get("/live.mjpg")
+async def live_mjpeg_stream():
+    """Direct HTTP multipart MJPEG stream - supported natively by all mobile browsers with 0 plugins."""
+    async def frame_generator():
+        while True:
+            t0 = time.time()
+            b64_frame = await asyncio.to_thread(capture_screen_optimized_jpeg_b64, 1280, 65)
+            if b64_frame:
+                raw_bytes = base64.b64decode(b64_frame)
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + raw_bytes + b"\r\n"
+                )
+            elapsed = time.time() - t0
+            await asyncio.sleep(max(0.01, 0.05 - elapsed))
+
+    return StreamingResponse(
+        frame_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
 
 
 @app.websocket("/stream")
@@ -103,7 +128,6 @@ async def websocket_stream(websocket: WebSocket):
     try:
         while is_running:
             start_t = time.time()
-            # Capture optimized 720p JPEG in background thread
             b64_frame = await asyncio.to_thread(capture_screen_optimized_jpeg_b64, 1280, quality)
             if b64_frame:
                 frame_payload = {
@@ -129,17 +153,28 @@ async def websocket_stream(websocket: WebSocket):
         logger.info("Mobile phone disconnected from stream.")
 
 
+_server_started = False
+_server_lock = threading.Lock()
+
+
 def run_streaming_server(host: str = "0.0.0.0", port: int = 8765):
-    """Run Uvicorn streaming server synchronously."""
+    """Run Uvicorn streaming server with wsproto protocol."""
     local_ip = get_local_ip()
-    logger.info("Starting Nemo WebSocket Screen Streamer on ws://%s:%d/stream (LAN: %s)", host, port, local_ip)
-    config = uvicorn.Config(app=app, host=host, port=port, log_level="warning")
+    logger.info("Starting Nemo Screen Streamer on ws://%s:%d/stream & http://%s:%d/live.mjpg", host, port, host, port)
+    # Explicitly specify ws='wsproto' to guarantee websocket support without warnings
+    config = uvicorn.Config(app=app, host=host, port=port, ws="wsproto", log_level="warning")
     server = uvicorn.Server(config)
     server.run()
 
 
-def start_streaming_server_thread(host: str = "0.0.0.0", port: int = 8765) -> threading.Thread:
-    """Start streaming server in a daemon thread."""
+def start_streaming_server_thread(host: str = "0.0.0.0", port: int = 8765) -> threading.Thread | None:
+    """Start streaming server in a daemon thread (singleton)."""
+    global _server_started
+    with _server_lock:
+        if _server_started:
+            return None
+        _server_started = True
+
     t = threading.Thread(target=run_streaming_server, args=(host, port), daemon=True, name="NemoScreenStreamer")
     t.start()
     return t
