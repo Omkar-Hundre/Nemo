@@ -21,6 +21,7 @@ class WhisperVoiceEngine:
     WAKE_WORDS = [
         "nemo", "hey nemo", "ok nemo", "hi nemo", "namo", "nemu",
         "memo", "neemo", "kneemo", "niemo", "nimmo", "hello nemo",
+        "and nemo",
     ]
 
     def __init__(self, model_size: str = "base.en", device: str = "cpu", compute_type: str = "int8") -> None:
@@ -45,7 +46,7 @@ class WhisperVoiceEngine:
             audio,
             beam_size=3,
             language="en",
-            initial_prompt="Nemo, Omkar, COSEM, DLMS, Python, Antigravity, FastAPI, Brave, GitHub, pytest, Windows, terminal",
+            initial_prompt="Nemo, Clovi, Omkar, WhatsApp, COSEM, DLMS, Python, Antigravity, FastAPI, Brave, GitHub, pytest, Windows, terminal",
             vad_filter=True,
             vad_parameters=dict(min_silence_duration_ms=400),
         )

@@ -53,7 +53,7 @@ class NemoVoiceService:
         self._stdin_thread: threading.Thread | None = None
 
         self._wake_active_until = 0.0
-        self.WAKE_WINDOW_SEC = 25.0
+        self.WAKE_WINDOW_SEC = 8.0
         self._proactive_silenced_until = 0.0
         self._last_proactive_checkin = time.time()
         self._last_interaction_time = time.time()
@@ -189,43 +189,33 @@ class NemoVoiceService:
 
                 if has_wake:
                     self._last_interaction_time = now
-                    self._wake_active_until = now + self.WAKE_WINDOW_SEC
                     console.print(f"[bold cyan][HEARD][/bold cyan] Wake word detected: '{text}'")
                     if self.panel:
                         self.panel.update_status("listening", "Hearing command...")
 
                     if command:
+                        # Direct command issued with wake word — close wake window immediately to prevent ambient pickup
+                        self._wake_active_until = 0.0
                         console.print(f"\n[bold green][VOICE TASK][/bold green] Executing: '[bold]{command}[/bold]'")
                         self.task_queue.submit_command(command)
+                    else:
+                        # User only spoke wake word ("Nemo") — open brief window for immediate follow-up command
+                        self._wake_active_until = now + self.WAKE_WINDOW_SEC
+
                 elif is_currently_awake and text.strip():
+                    # Follow-up command spoken during the brief wake window after saying "Nemo"
+                    self._wake_active_until = 0.0  # Close wake window immediately upon receiving command
                     self._last_interaction_time = now
-                    self._wake_active_until = now + self.WAKE_WINDOW_SEC
                     console.print(f"\n[bold green][VOICE TASK][/bold green] Follow-up command: '[bold]{text}[/bold]'")
                     self.task_queue.submit_command(text)
-                else:
-                    # Check if speech is a natural developer inquiry or follow-up
-                    clean_lower = text.strip().lower()
-                    NATURAL_ACTIONS = (
-                        "can you", "could you", "where is", "where are",
-                        "find", "search", "check", "what is", "how do",
-                        "how can", "show me", "list", "open", "tell me",
-                        "so like", "so, like",
-                        "i didnt understand", "i didn't understand", "what does that mean",
-                    )
-                    recent_activity = (now - self._last_interaction_time) < 45.0
-                    is_action = any(clean_lower.startswith(act) for act in NATURAL_ACTIONS)
 
-                    if recent_activity or is_action:
-                        self._last_interaction_time = now
-                        self._wake_active_until = now + self.WAKE_WINDOW_SEC
-                        console.print(f"\n[bold green][CONVERSATIONAL TASK][/bold green] Executing: '[bold]{text}[/bold]'")
-                        self.task_queue.submit_command(text)
-                    else:
-                        disp = text if len(text) <= 60 else text[:57] + "..."
-                        console.print(f"[dim]🎤 [Mic Heard]: \"{disp}\" [italic](Say 'Nemo, ...' or type below)[/italic][/dim]")
-                        if self.panel:
-                            short_disp = text if len(text) <= 22 else text[:19] + "..."
-                            self.panel.update_status("idle", f"Heard: {short_disp}")
+                else:
+                    # STRICT LISTENING SAFEGUARD: Never auto-execute random ambient noise or audio without wake word
+                    disp = text if len(text) <= 60 else text[:57] + "..."
+                    console.print(f"[dim]🎤 [Mic Heard]: \"{disp}\" [italic](Say 'Nemo, ...' or type below)[/italic][/dim]")
+                    if self.panel:
+                        short_disp = text if len(text) <= 22 else text[:19] + "..."
+                        self.panel.update_status("idle", f"Heard: {short_disp}")
 
             except Exception as e:
                 logger.error("Error transcribing speech chunk: %s", e)
