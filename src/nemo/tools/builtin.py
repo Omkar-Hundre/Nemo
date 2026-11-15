@@ -6005,6 +6005,38 @@ class ActiveFileInspectorTool(BaseTool):
         )
 
 
+class ApplicantProfileManager:
+    """Helper to load and persist applicant profile, academic records, and resume info."""
+
+    @staticmethod
+    def get_profile() -> dict[str, Any]:
+        """Load applicant profile from workspace or global ~/.nemo/."""
+        for p in [Path("d:/Nemo/applicant_profile.json"), Path.home() / ".nemo" / "applicant_profile.json"]:
+            if p.exists():
+                try:
+                    return json.loads(p.read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+        return {}
+
+    @staticmethod
+    def get_summary_text() -> str:
+        """Format applicant credentials for prompt context."""
+        p = ApplicantProfileManager.get_profile()
+        if not p:
+            return "No applicant profile found."
+        return (
+            f"Candidate: {p.get('name')} | DOB: {p.get('dob')} | Gender: {p.get('gender')}\n"
+            f"Email: {p.get('email')} | Phone: {p.get('phone')} | Location: {p.get('city')}, {p.get('state')}\n"
+            f"College: {p.get('college')}\n"
+            f"Degree: {p.get('degree')} | Branch: {p.get('branch')} | Batch: {p.get('batch')}\n"
+            f"Academics: CGPA: {p.get('cgpa')} ({p.get('college_percent')}%) | 12th/PUC: {p.get('twelfth_percent')}% | 10th/Matric: {p.get('tenth_percent')}%\n"
+            f"Parents: Father: {p.get('father_name')} | Mother: {p.get('mother_name')}\n"
+            f"Links: Portfolio: {p.get('portfolio')} | LinkedIn: {p.get('linkedin')} | GitHub: {p.get('github')}\n"
+            f"Resume File: {p.get('resume_path')}"
+        )
+
+
 class MessagingDispatchTool(BaseTool):
     """Automate messaging, file attachments, and visual chat/group analysis via WhatsApp, Telegram, Slack, Discord, or Email."""
     name = "messaging_dispatch"
@@ -6469,8 +6501,8 @@ class MessagingDispatchTool(BaseTool):
         subprocess.Popen(f'start "" "{uri}"', shell=True)
         return {"success": True, "method": "mailto_uri"}
 
-    async def _analyze_chat_screen(self, platform_choice: str, recipient: str, query: str) -> dict[str, Any]:
-        """Navigate to chat/group, capture conversation view, and visually analyze using Vision AI."""
+    async def _analyze_chat_screen(self, platform_choice: str, recipient: str, query: str, scroll_depth: int = 4) -> dict[str, Any]:
+        """Navigate to chat/group, continuously scroll up to capture past posts, and analyze opportunities with Vision AI."""
         # 1. Open and focus the requested chat/group
         if platform_choice == "whatsapp":
             open_res = self._send_whatsapp(recipient, message="", file_path=None)
@@ -6480,32 +6512,72 @@ class MessagingDispatchTool(BaseTool):
             self._send_telegram(recipient, message="", file_path=None)
         time.sleep(1.8)  # Let conversation messages fully render on screen
 
-        # 2. Capture screenshot of desktop
-        b64 = capture_desktop_screenshot_base64()
-        if not b64:
+        # 2. Multi-page capture: capture bottom messages, then scroll up to capture earlier messages
+        screenshots: list[str] = []
+        b64_initial = capture_desktop_screenshot_base64()
+        if b64_initial:
+            screenshots.append(b64_initial)
+
+        # Scroll up to scan earlier posts
+        if scroll_depth > 1 and platform_choice == "whatsapp":
+            try:
+                from pywinauto import keyboard
+                for _ in range(scroll_depth - 1):
+                    keyboard.send_keys("{PGUP}")
+                    time.sleep(1.2)
+                    b64_next = capture_desktop_screenshot_base64()
+                    if b64_next:
+                        screenshots.append(b64_next)
+            except Exception:
+                pass
+
+        if not screenshots:
             return {"success": False, "error": "Could not capture screen for chat analysis. Ensure active interactive session."}
+
+        profile_summary = ApplicantProfileManager.get_summary_text()
 
         # 3. Vision-Language Analysis using Nvidia NIM
         analysis_prompt = (
-            f"You are inspecting the active {platform_choice.title()} conversation with '{recipient}'.\n"
-            f"User request: {query or 'Check recent posts, summarize key updates, and identify any action items'}.\n\n"
+            f"You are inspecting the active {platform_choice.title()} conversation/group with '{recipient}'.\n"
+            f"User request: {query or 'Scan recent posts, identify all job/internship opportunities, and tell me if I need to apply'}.\n\n"
+            f"Applicant Profile for Eligibility Matching:\n{profile_summary}\n\n"
             "Instructions:\n"
-            "1. Read all visible messages and posts in this chat thread from top to bottom.\n"
-            "2. If this is a placement, job, or announcements group:\n"
-            "   - List each opportunity mentioned with Company Name, Role, Eligibility (Branch, CGPA, Batch), Deadline, and Application Link.\n"
-            "   - State clearly whether the user should apply and summarize the key reasons.\n"
-            "3. If this is a regular contact chat, summarize what was asked or discussed and what response is needed.\n"
-            "4. Be concise, direct, and well-structured."
+            "1. Read all visible messages and posts across the captured chat views from top to bottom.\n"
+            "2. Identify ALL distinct placement / job / internship drives, opportunities, or off-campus posts mentioned.\n"
+            "3. For each opportunity, extract:\n"
+            "   - Company Name\n"
+            "   - Role / Designation\n"
+            "   - Eligibility Criteria (Degree, Branches, CGPA / percentage cutoffs, Batch)\n"
+            "   - Deadline / Last Date to Apply\n"
+            "   - Exact Application Link or Form URL (Google Forms, career links, etc.)\n"
+            "   - Eligibility Status for Applicant: State clearly 'Eligible' or 'Not Eligible' based on Omkar's profile (CGPA: 8.8, 10th: 90.2%, 12th: 85.2%, CSE 2027).\n"
+            "4. Provide a clear final recommendation list of companies the user SHOULD apply to, with clickable links and next steps.\n"
+            "5. If a drive has already concluded or no active application link exists, state that clearly.\n"
+            "6. Present your findings in a structured, clean format."
         )
 
         try:
             from nemo.ai.providers.nvidia import NvidiaNimProvider
             provider = NvidiaNimProvider()
-            analysis_text = await provider.analyze_image(image_base64=b64, prompt=analysis_prompt)
+            analysis_text = await provider.analyze_image(image_base64=screenshots[0], prompt=analysis_prompt)
+
+            if len(screenshots) > 1:
+                older_prompt = (
+                    "Here is an earlier page scrolled up in the same group. "
+                    "Extract any additional or earlier job posts, company drives, deadlines, and application links not mentioned before."
+                )
+                try:
+                    older_analysis = await provider.analyze_image(image_base64=screenshots[-1], prompt=older_prompt)
+                    if older_analysis and "no job" not in older_analysis.lower() and "none" not in older_analysis.lower():
+                        analysis_text += f"\n\n### Earlier Posts Scanned Above:\n{older_analysis}"
+                except Exception:
+                    pass
+
             return {
                 "success": True,
                 "platform": platform_choice,
                 "recipient": recipient,
+                "pages_scanned": len(screenshots),
                 "analysis": analysis_text,
                 "summary": analysis_text,
             }
@@ -6541,13 +6613,33 @@ class MessagingDispatchTool(BaseTool):
             if not target_url:
                 return ToolResult(success=False, error="No application URL provided to apply.")
 
+            profile = ApplicantProfileManager.get_profile()
             webbrowser.open(target_url)
+
             return ToolResult(
                 success=True,
                 data={
                     "status": "application_opened",
                     "url": target_url,
-                    "summary": f"Opened application form at {target_url} in your browser. Ready for submission.",
+                    "applicant": profile.get("name"),
+                    "details_prepared": {
+                        "name": profile.get("name"),
+                        "email": profile.get("email"),
+                        "phone": profile.get("phone"),
+                        "college": profile.get("college"),
+                        "degree": profile.get("degree"),
+                        "branch": profile.get("branch"),
+                        "cgpa": profile.get("cgpa"),
+                        "10th": profile.get("tenth_percent"),
+                        "12th": profile.get("twelfth_percent"),
+                        "resume": profile.get("resume_path"),
+                    },
+                    "instructions": (
+                        f"Opened application portal at {target_url} in browser. "
+                        "All applicant details from Omkar's profile and resume are prepared. "
+                        "If an OTP is requested, please provide it. If a CAPTCHA appears, complete it in the browser window and inform me to finish."
+                    ),
+                    "summary": f"Opened application form at {target_url} with Omkar's details prepared.",
                 },
             )
 

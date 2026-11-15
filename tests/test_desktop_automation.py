@@ -12,6 +12,7 @@ import pytest
 # 3. Local imports
 from nemo.tools.builtin import (
     ActiveFileInspectorTool,
+    ApplicantProfileManager,
     MessagingDispatchTool,
     WindowsGuiTool,
 )
@@ -44,6 +45,15 @@ class TestActiveFileInspector:
 
 
 class TestMessagingDispatchTool:
+    def test_applicant_profile_manager(self):
+        p = ApplicantProfileManager.get_profile()
+        assert p.get("name") == "Omkar Raju Hundre"
+        assert p.get("cgpa") == 8.8
+        assert p.get("degree") == "Bachelor of Engineering (B.E.)"
+        summary = ApplicantProfileManager.get_summary_text()
+        assert "Omkar Raju Hundre" in summary
+        assert "8.8" in summary
+
     def test_contact_name_matching(self):
         tool = MessagingDispatchTool()
         assert tool._match_contact_name("bund account") == "bund"
