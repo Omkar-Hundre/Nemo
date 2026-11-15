@@ -50,6 +50,7 @@ class NemoVoiceService:
         self._loop_thread: threading.Thread | None = None
         self._speech_thread: threading.Thread | None = None
         self._proactive_thread: threading.Thread | None = None
+        self._stdin_thread: threading.Thread | None = None
 
         self._wake_active_until = 0.0
         self.WAKE_WINDOW_SEC = 8.0
@@ -106,7 +107,11 @@ class NemoVoiceService:
             self._proactive_thread = threading.Thread(target=self._proactive_worker_loop, daemon=True)
             self._proactive_thread.start()
 
-        # 5. Show minimal bottom-right Action Panel pill
+        # 5. Start Terminal STDIN listener (allows typing commands or questions anytime)
+        self._stdin_thread = threading.Thread(target=self._stdin_worker_loop, daemon=True)
+        self._stdin_thread.start()
+
+        # 6. Show minimal bottom-right Action Panel pill
         if self.panel:
             self.panel.start(block=block)
         elif block:
@@ -194,9 +199,33 @@ class NemoVoiceService:
                     console.print(f"\n[bold green][VOICE TASK][/bold green] Follow-up command: '[bold]{text}[/bold]'")
                     self._wake_active_until = 0.0
                     self.task_queue.submit_command(text)
+                else:
+                    disp = text if len(text) <= 60 else text[:57] + "..."
+                    console.print(f"[dim]🎤 [Mic Heard]: \"{disp}\" [italic](Say 'Nemo, ...' or type below)[/italic][/dim]")
+                    if self.panel:
+                        short_disp = text if len(text) <= 22 else text[:19] + "..."
+                        self.panel.update_status("idle", f"Heard: {short_disp}")
 
             except Exception as e:
                 logger.error("Error transcribing speech chunk: %s", e)
+
+    def _stdin_worker_loop(self) -> None:
+        """Allow typing commands directly into the terminal while voice is active."""
+        import sys
+        console.print("[dim]⌨️  Interactive Mode: You can speak [bold cyan]'Nemo ...'[/bold cyan] or type commands directly into this terminal.[/dim]\n")
+        while not self._stop_event.is_set():
+            try:
+                line = sys.stdin.readline()
+                if not line:
+                    time.sleep(0.2)
+                    continue
+                cmd = line.strip()
+                if cmd:
+                    console.print(f"\n[bold green][TERMINAL COMMAND][/bold green] Executing: '[bold]{cmd}[/bold]'")
+                    self.task_queue.submit_command(cmd)
+            except Exception as ex:
+                logger.debug("Terminal input ended: %s", ex)
+                break
 
     def _proactive_worker_loop(self) -> None:
         """Periodic background companion that checks for knowledge gaps and deepens memory."""

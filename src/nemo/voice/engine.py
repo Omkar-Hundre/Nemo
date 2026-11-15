@@ -18,7 +18,10 @@ logger = logging.getLogger(__name__)
 class WhisperVoiceEngine:
     """Local, offline speech recognition using faster-whisper INT8."""
 
-    WAKE_WORDS = ["nemo", "hey nemo", "ok nemo", "hi nemo", "namo", "nemu"]
+    WAKE_WORDS = [
+        "nemo", "hey nemo", "ok nemo", "hi nemo", "namo", "nemu",
+        "memo", "neemo", "kneemo", "niemo", "nimmo", "hello nemo",
+    ]
 
     def __init__(self, model_size: str = "base.en", device: str = "cpu", compute_type: str = "int8") -> None:
         self.model_size = model_size

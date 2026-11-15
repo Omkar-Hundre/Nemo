@@ -26,7 +26,7 @@ class AudioCaptureService:
         chunk_duration_ms: int = 30,
         silence_timeout_sec: float = 0.8,
         pre_roll_sec: float = 0.4,
-        energy_threshold: float = 0.015,
+        energy_threshold: float = 0.005,
     ) -> None:
         self.sample_rate = sample_rate
         self.chunk_size = int(sample_rate * (chunk_duration_ms / 1000.0))
@@ -40,6 +40,7 @@ class AudioCaptureService:
         self._speech_buffer: list[np.ndarray] = []
         self._is_speaking = False
         self._last_speech_time = 0.0
+        self._ambient_rms = 0.002
         self._audio_queue: deque[np.ndarray] = deque()
         self._lock = threading.Lock()
 
@@ -84,7 +85,12 @@ class AudioCaptureService:
 
         now = time.time()
 
-        if rms > self.energy_threshold:
+        # Dynamic ambient noise adaptation during silence
+        if not self._is_speaking and rms < self.energy_threshold:
+            self._ambient_rms = 0.95 * self._ambient_rms + 0.05 * rms
+
+        effective_threshold = max(0.003, self._ambient_rms * 1.8)
+        if rms > max(self.energy_threshold, effective_threshold):
             if not self._is_speaking:
                 # Speech onset
                 self._is_speaking = True
