@@ -6126,8 +6126,8 @@ class MessagingDispatchTool(BaseTool):
                 # Windows UWP/WinUI windows (like WhatsApp Desktop) might have IsWindowVisible=0
                 # when behind other windows or cloaked, so match on non-empty title or class name
                 if (title or target_keyword.lower() in cname) and (target_keyword.lower() in title.lower() or target_keyword.lower() in cname):
-                    # Filter out background GDI+ hooks
-                    if "gdi+" not in cname and "gdi+" not in title.lower():
+                    # Filter out background GDI+ hooks and child WebView windows
+                    if "gdi+" not in cname and "gdi+" not in title.lower() and "chrome_widgetwin" not in cname:
                         found_hwnds.append(hwnd)
 
             try:
@@ -6147,34 +6147,18 @@ class MessagingDispatchTool(BaseTool):
         if not target_hwnd:
             return None
 
-        # Force window to foreground using AttachThreadInput + Alt-key bypass
+        # Force window to foreground using SwitchToThisWindow + ShowWindow
         try:
             if win32gui.IsIconic(target_hwnd):
                 win32gui.ShowWindow(target_hwnd, win32con.SW_RESTORE)
             else:
                 win32gui.ShowWindow(target_hwnd, win32con.SW_SHOW)
 
-            fore_hwnd = win32gui.GetForegroundWindow()
-            if fore_hwnd != target_hwnd:
-                fore_tid, _ = win32process.GetWindowThreadProcessId(fore_hwnd)
-                cur_tid = ctypes.windll.kernel32.GetCurrentThreadId()
-                target_tid, _ = win32process.GetWindowThreadProcessId(target_hwnd)
-
-                try:
-                    user32.AttachThreadInput(cur_tid, target_tid, True)
-                    if fore_tid:
-                        user32.AttachThreadInput(fore_tid, target_tid, True)
-
-                    # Simulating Alt-key (VK_MENU=0x12) bypasses Windows SetForegroundWindow lock
-                    user32.keybd_event(0x12, 0, 0, 0)
-                    user32.SetForegroundWindow(target_hwnd)
-                    user32.BringWindowToTop(target_hwnd)
-                    user32.SetFocus(target_hwnd)
-                    user32.keybd_event(0x12, 0, 2, 0)
-                finally:
-                    user32.AttachThreadInput(cur_tid, target_tid, False)
-                    if fore_tid:
-                        user32.AttachThreadInput(fore_tid, target_tid, False)
+            # SwitchToThisWindow forces target window to foreground even if calling thread lacks foreground lock
+            user32.SwitchToThisWindow(target_hwnd, True)
+            user32.SetForegroundWindow(target_hwnd)
+            user32.BringWindowToTop(target_hwnd)
+            user32.SetFocus(target_hwnd)
         except Exception:
             pass
 
@@ -6184,7 +6168,7 @@ class MessagingDispatchTool(BaseTool):
                 try:
                     cur_title = win32gui.GetWindowText(cur_fore).lower()
                     cur_class = win32gui.GetClassName(cur_fore).lower()
-                    if cur_fore == target_hwnd or target_keyword.lower() in cur_title or target_keyword.lower() in cur_class:
+                    if cur_fore == target_hwnd or "winuidesktopwin32windowclass" in cur_class or (target_keyword.lower() in cur_title and "antigravity" not in cur_title and "code" not in cur_class):
                         return cur_fore
                 except Exception:
                     pass
@@ -6196,12 +6180,58 @@ class MessagingDispatchTool(BaseTool):
             try:
                 cur_title = win32gui.GetWindowText(cur_fore).lower()
                 cur_class = win32gui.GetClassName(cur_fore).lower()
-                if cur_fore == target_hwnd or target_keyword.lower() in cur_title or target_keyword.lower() in cur_class:
+                if cur_fore == target_hwnd or "winuidesktopwin32windowclass" in cur_class or (target_keyword.lower() in cur_title and "antigravity" not in cur_title and "code" not in cur_class):
                     return cur_fore
             except Exception:
                 pass
 
         return None
+
+    @classmethod
+    def _match_contact_name(cls, query: str, wa_hwnd: int | None = None) -> str:
+        """Find best matching contact name in WhatsApp's visible chat list if present."""
+        if not query:
+            return query
+        clean_q = re.sub(r"(?i)\b(account|chat|'s chat|'s|contact)\b", "", query).strip() or query
+        if not wa_hwnd:
+            return clean_q
+        try:
+            from pywinauto import Desktop
+            import difflib
+            app = Desktop(backend="uia").window(handle=wa_hwnd)
+            items = app.descendants(control_type="DataItem")
+            chat_names: list[str] = []
+            for it in items:
+                txt = it.window_text().strip()
+                if txt and not any(txt.startswith(p) for p in ("Pinned", "New message", "Draft", "Chats", "Groups in common")):
+                    first_part = txt.split("\n")[0].split("  ")[0]
+                    first_part = re.sub(r"\s+\d{1,2}:\d{2}.*$", "", first_part).strip()
+                    first_part = re.sub(r"^\d+\s+unread\s+messages?\s+", "", first_part, flags=re.I).strip()
+                    if first_part and first_part not in chat_names:
+                        chat_names.append(first_part)
+
+            q_low = clean_q.lower()
+            for name in chat_names:
+                if q_low in name.lower() or name.lower().startswith(q_low):
+                    return name
+
+            def _phonetic_norm(s: str) -> str:
+                s = s.lower()
+                for a, b in [("th", "t"), ("ou", "au"), ("ow", "au"), ("oo", "u"), ("ee", "i"), ("ph", "f")]:
+                    s = s.replace(a, b)
+                return re.sub(r"[^a-z0-9]", "", s)
+
+            norm_q = _phonetic_norm(clean_q)
+            for name in chat_names:
+                norm_n = _phonetic_norm(name.split()[0] if name else "")
+                if norm_q in norm_n or norm_n in norm_q:
+                    return name
+                sim = difflib.SequenceMatcher(None, norm_q, norm_n).ratio()
+                if sim >= 0.7:
+                    return name
+        except Exception:
+            pass
+        return clean_q
 
     @staticmethod
     def _is_whatsapp_preview_active(wa_hwnd: int) -> bool:
@@ -6251,28 +6281,47 @@ class MessagingDispatchTool(BaseTool):
                     active_class = win32gui.GetClassName(cur_fore).lower()
                 except Exception:
                     pass
-            if "whatsapp" not in active_title and "whatsapp" not in active_class and "winuidesktopwin32windowclass" not in active_class:
+            if "winuidesktopwin32windowclass" not in active_class and ("whatsapp" not in active_title or "code" in active_class or "chrome_widgetwin" in active_class):
                 return {"success": False, "error": f"Focus check failed: current active window is '{active_title}', not WhatsApp. Keystrokes aborted to protect active IDE."}
 
-            time.sleep(1.0)  # Settle WhatsApp window after bringing to front
+            time.sleep(0.8)  # Settle WhatsApp window after bringing to front
 
             # If recipient is specified and not already the active conversation, search contact
             if recipient and recipient.lower() not in ("active", "current", "this chat", "chat", "open"):
+                matched_recipient = self._match_contact_name(recipient, wa_hwnd)
+                search_term = matched_recipient.split()[0] if matched_recipient else recipient
+                navigated = False
                 try:
-                    from pywinauto import keyboard
-                    # Ctrl+F to open search
-                    keyboard.send_keys("^f")
-                    time.sleep(1.0)  # Wait for search box to gain focus
+                    from pywinauto import Desktop
+                    app = Desktop(backend="uia").window(handle=wa_hwnd)
+                    edits = app.descendants(control_type="Edit")
+                    if edits:
+                        search_edit = edits[0]
+                        search_edit.set_focus()
+                        search_edit.set_text(search_term)
+                        time.sleep(1.0)
+                        search_edit.type_keys("{ENTER}")
+                        time.sleep(1.5)
+                        navigated = True
+                except Exception:
+                    navigated = False
 
-                    # Type recipient contact name
-                    keyboard.send_keys(f"{recipient}")
-                    time.sleep(1.5)  # Let WhatsApp search index and show results
-
-                    # Hit Enter to open the conversation
-                    keyboard.send_keys("{ENTER}")
-                    time.sleep(2.0)  # Slow down: let conversation thread and input panel fully load
-                except Exception as e:
-                    return {"success": False, "error": f"WhatsApp contact navigation failed: {e}"}
+                if not navigated:
+                    # Fallback only if foreground window is strictly confirmed as WhatsApp
+                    cur_fore = win32gui.GetForegroundWindow()
+                    f_title = win32gui.GetWindowText(cur_fore).lower() if cur_fore else ""
+                    f_class = win32gui.GetClassName(cur_fore).lower() if cur_fore else ""
+                    if "winuidesktopwin32windowclass" in f_class or ("whatsapp" in f_title and "chrome_widgetwin" not in f_class):
+                        try:
+                            from pywinauto import keyboard
+                            keyboard.send_keys("^f")
+                            time.sleep(0.8)
+                            keyboard.send_keys(f"{search_term}{{ENTER}}")
+                            time.sleep(1.5)
+                        except Exception as e:
+                            return {"success": False, "error": f"WhatsApp contact navigation failed: {e}"}
+                    else:
+                        return {"success": False, "error": f"WhatsApp lost focus (current: '{f_title}'). Keystrokes aborted to protect active IDE."}
 
         # 3. Handle File Attachment vs Text-Only Message
         if file_path and file_path.exists():
@@ -6326,13 +6375,20 @@ class MessagingDispatchTool(BaseTool):
         else:
             # Text-only message or View/Open Chat
             if message and not is_phone:
-                try:
-                    from pywinauto import keyboard
-                    time.sleep(0.5)
-                    keyboard.send_keys(f"{message}{{ENTER}}")
-                    time.sleep(1.0)
-                except Exception as e:
-                    return {"success": False, "error": f"Failed to send text message in WhatsApp: {e}"}
+                import win32gui
+                cur_fore = win32gui.GetForegroundWindow()
+                f_title = win32gui.GetWindowText(cur_fore).lower() if cur_fore else ""
+                f_class = win32gui.GetClassName(cur_fore).lower() if cur_fore else ""
+                if "winuidesktopwin32windowclass" in f_class or ("whatsapp" in f_title and "chrome_widgetwin" not in f_class):
+                    try:
+                        from pywinauto import keyboard
+                        time.sleep(0.5)
+                        keyboard.send_keys(f"{message}{{ENTER}}")
+                        time.sleep(1.0)
+                    except Exception as e:
+                        return {"success": False, "error": f"Failed to send text message in WhatsApp: {e}"}
+                else:
+                    return {"success": False, "error": f"WhatsApp lost focus (current: '{f_title}'). Message keystrokes aborted to protect active IDE."}
 
         if not message and not file_path:
             clean_rec = recipient if recipient and recipient.lower() not in ("active", "current", "this chat", "chat", "open") else "active"

@@ -44,6 +44,12 @@ class TestActiveFileInspector:
 
 
 class TestMessagingDispatchTool:
+    def test_contact_name_matching(self):
+        tool = MessagingDispatchTool()
+        assert tool._match_contact_name("bund account") == "bund"
+        assert tool._match_contact_name("gotham's chat") == "gotham"
+        assert tool._match_contact_name("rohan") == "rohan"
+
     def test_schedule_delay_parsing(self):
         tool = MessagingDispatchTool()
 

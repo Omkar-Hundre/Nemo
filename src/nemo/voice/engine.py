@@ -46,7 +46,7 @@ class WhisperVoiceEngine:
             audio,
             beam_size=3,
             language="en",
-            initial_prompt="Nemo, Clovi, Omkar, WhatsApp, COSEM, DLMS, Python, Antigravity, FastAPI, Brave, GitHub, pytest, Windows, terminal",
+            initial_prompt="Nemo, Clovi, Omkar, WhatsApp, Bundu, Goutam, Gautam, Patil, placements, COSEM, DLMS, Python, Antigravity, FastAPI, Brave, GitHub, pytest, Windows, terminal",
             vad_filter=True,
             vad_parameters=dict(min_silence_duration_ms=400),
         )
