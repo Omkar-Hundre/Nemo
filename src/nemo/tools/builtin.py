@@ -6183,8 +6183,21 @@ class MessagingDispatchTool(BaseTool):
 
         return target_hwnd
 
+    @staticmethod
+    def _is_whatsapp_preview_active(wa_hwnd: int) -> bool:
+        """Check if an attachment preview modal or dialog is currently open in WhatsApp."""
+        try:
+            from pywinauto import Desktop
+            app = Desktop(backend="uia").window(handle=wa_hwnd)
+            doc = app.children()[2].children()[1].children()[0].children()[0].children()[1].children()[0].children()[1].children()[0].children()[0]
+            mount = doc.children()[0].children()[0]
+            dialog_container = mount.children()[2]
+            return len(dialog_container.children()) > 0
+        except Exception:
+            return False
+
     def _send_whatsapp(self, recipient: str, message: str, file_path: Path | None) -> dict[str, Any]:
-        """Dispatch via WhatsApp Desktop or URI protocol."""
+        """Dispatch via WhatsApp Desktop or URI protocol with stable UI synchronization."""
         clean_num = re.sub(r"[^\d+]", "", recipient)
         is_phone = len(clean_num) >= 7 and (clean_num.startswith("+") or clean_num.isdigit())
 
@@ -6193,15 +6206,18 @@ class MessagingDispatchTool(BaseTool):
         if is_phone:
             clean_digits = clean_num.lstrip("+")
             uri = f"whatsapp://send?phone={clean_digits}"
-            if encoded_msg:
+            if encoded_msg and not file_path:
                 uri += f"&text={encoded_msg}"
             subprocess.Popen(f'start "" "{uri}"', shell=True)
-            self._focus_app_window("whatsapp", max_wait=4.0)
+            wa_hwnd = self._focus_app_window("whatsapp", max_wait=5.0)
+            if not wa_hwnd:
+                return {"success": False, "error": "WhatsApp window could not be brought to the foreground."}
+            time.sleep(2.0)  # Slow down: let chat UI load and stabilize
         else:
             # 1. Bring WhatsApp window to foreground
             subprocess.Popen('start "" "whatsapp:"', shell=True)
-            focused = self._focus_app_window("whatsapp", max_wait=6.0)
-            if not focused:
+            wa_hwnd = self._focus_app_window("whatsapp", max_wait=6.0)
+            if not wa_hwnd:
                 return {"success": False, "error": "WhatsApp window could not be brought to the foreground. Make sure WhatsApp is installed and running."}
 
             # 2. Strict Guard: Verify foreground window is actually WhatsApp before sending ANY keystrokes!
@@ -6218,35 +6234,87 @@ class MessagingDispatchTool(BaseTool):
             if "whatsapp" not in active_title and "whatsapp" not in active_class and "winuidesktopwin32windowclass" not in active_class:
                 return {"success": False, "error": f"Focus check failed: current active window is '{active_title}', not WhatsApp. Keystrokes aborted to protect active IDE."}
 
-            try:
-                from pywinauto import keyboard
-                time.sleep(0.4)
-                # Ctrl+F to search
-                keyboard.send_keys("^f")
-                time.sleep(0.5)
-                # Type recipient contact name and hit Enter
-                keyboard.send_keys(f"{recipient}{{ENTER}}")
-                time.sleep(0.8)
-                if message:
-                    keyboard.send_keys(f"{message}{{ENTER}}")
-                    time.sleep(0.4)
-            except Exception as e:
-                return {"success": False, "error": f"WhatsApp contact navigation failed: {e}"}
+            time.sleep(1.0)  # Settle WhatsApp window after bringing to front
 
-        # Only attach file if file_path is explicitly provided
+            # If recipient is specified and not already the active conversation, search contact
+            if recipient and recipient.lower() not in ("active", "current", "this chat", "chat", "open"):
+                try:
+                    from pywinauto import keyboard
+                    # Ctrl+F to open search
+                    keyboard.send_keys("^f")
+                    time.sleep(1.0)  # Wait for search box to gain focus
+
+                    # Type recipient contact name
+                    keyboard.send_keys(f"{recipient}")
+                    time.sleep(1.5)  # Let WhatsApp search index and show results
+
+                    # Hit Enter to open the conversation
+                    keyboard.send_keys("{ENTER}")
+                    time.sleep(2.0)  # Slow down: let conversation thread and input panel fully load
+                except Exception as e:
+                    return {"success": False, "error": f"WhatsApp contact navigation failed: {e}"}
+
+        # 3. Handle File Attachment vs Text-Only Message
         if file_path and file_path.exists():
-            self._focus_app_window("whatsapp", max_wait=2.0)
+            # Ensure WhatsApp remains focused
+            wa_hwnd = self._focus_app_window("whatsapp", max_wait=3.0) or wa_hwnd
             self._copy_file_to_clipboard(file_path)
-            time.sleep(0.5)
+            time.sleep(0.8)
+
             try:
                 from pywinauto import keyboard
+                # Paste the file into WhatsApp
                 keyboard.send_keys("^v")
-                time.sleep(0.8)
-                keyboard.send_keys("{ENTER}")
-            except Exception as e:
-                return {"success": False, "error": f"Failed to paste file attachment into WhatsApp: {e}"}
 
-        return {"success": True, "method": "whatsapp_uri" if is_phone else "whatsapp_ui_search"}
+                # SLOW DOWN & STABILIZE: Let WhatsApp read the file from disk, render the preview, and show the send overlay
+                time.sleep(3.0)
+
+                # In WhatsApp's attachment preview modal, focus is automatically placed in the caption input ("Add a caption...")
+                if message:
+                    keyboard.send_keys(f"{message}")
+                    time.sleep(1.0)  # Let caption text settle in the UI
+
+                # Send attachment
+                keyboard.send_keys("{ENTER}")
+                time.sleep(2.0)  # Let WhatsApp initiate send and dismiss the preview modal
+
+                # VERIFY AT THE END IF THE JOB WAS ACTUALLY FINISHED
+                if wa_hwnd and self._is_whatsapp_preview_active(wa_hwnd):
+                    # Preview modal is still active — retry Enter
+                    time.sleep(1.0)
+                    keyboard.send_keys("{ENTER}")
+                    time.sleep(2.0)
+
+                if wa_hwnd and self._is_whatsapp_preview_active(wa_hwnd):
+                    # Second attempt with Ctrl+Enter
+                    keyboard.send_keys("^{ENTER}")
+                    time.sleep(2.0)
+
+                # Final verification check
+                is_still_open = wa_hwnd and self._is_whatsapp_preview_active(wa_hwnd)
+                if is_still_open:
+                    return {
+                        "success": True,
+                        "delivered": False,
+                        "status": "attached_preview_open",
+                        "method": "whatsapp_paste",
+                        "warning": "The file was attached in WhatsApp, but the preview overlay remained open on screen. Please press Send."
+                    }
+
+            except Exception as e:
+                return {"success": False, "error": f"Failed to attach/send file in WhatsApp: {e}"}
+        else:
+            # Text-only message
+            if message and not is_phone:
+                try:
+                    from pywinauto import keyboard
+                    time.sleep(0.5)
+                    keyboard.send_keys(f"{message}{{ENTER}}")
+                    time.sleep(1.0)
+                except Exception as e:
+                    return {"success": False, "error": f"Failed to send text message in WhatsApp: {e}"}
+
+        return {"success": True, "delivered": True, "method": "whatsapp_uri" if is_phone else "whatsapp_ui_search"}
 
     def _send_telegram(self, recipient: str, message: str, file_path: Path | None) -> dict[str, Any]:
         """Dispatch via Telegram Desktop."""
@@ -6320,12 +6388,18 @@ class MessagingDispatchTool(BaseTool):
 
         # Resolve active file ONLY if user explicitly asked for a file
         target_file: Path | None = None
-        if file_arg and file_arg.lower() not in ("active", "selected", "hovered", "none", ""):
+        if file_arg and file_arg.lower() not in ("active", "selected", "hovered", "none", "", "this", "video", "file", "document", "image", "photo", "pdf"):
             target_file = Path(file_arg)
-        elif file_arg and file_arg.lower() in ("active", "selected", "hovered"):
+        elif file_arg and file_arg.lower() in ("active", "selected", "hovered", "this", "video", "file", "document", "image", "photo", "pdf"):
             active_files = ActiveFileInspectorTool.get_selected_files()
             if active_files:
                 target_file = Path(active_files[0])
+            else:
+                hovered = ActiveFileInspectorTool.get_hovered_file()
+                if hovered:
+                    target_file = Path(hovered)
+            if not target_file:
+                return ToolResult(success=False, error="No file is currently selected or hovered in Windows Explorer/Desktop. Please select the file first.")
 
         if target_file and not target_file.exists():
             return ToolResult(success=False, error=f"Target file not found: {target_file}")
@@ -6388,14 +6462,16 @@ class MessagingDispatchTool(BaseTool):
             return ToolResult(success=False, error=res.get("error", "Dispatch failed."))
 
         file_desc = f"'{target_file.name}'" if target_file else "message"
+        delivered = res.get("delivered", True)
+        summary = res.get("warning") if not delivered else f"Sent {file_desc} to {recipient} via {platform_choice.title()} successfully."
         return ToolResult(
             success=True,
             data={
-                "delivered": True,
+                "delivered": delivered,
                 "platform": platform_choice,
                 "recipient": recipient,
                 "file_path": str(target_file) if target_file else None,
-                "summary": f"Sent {file_desc} to {recipient} via {platform_choice.title()} successfully.",
+                "summary": summary,
             },
         )
 

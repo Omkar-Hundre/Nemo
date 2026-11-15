@@ -101,6 +101,7 @@ class TestMessagingDispatchTool:
              patch("win32gui.GetForegroundWindow", return_value=12345), \
              patch("win32gui.GetWindowText", return_value="WhatsApp"), \
              patch("win32gui.GetClassName", return_value="WinUIDesktopWin32WindowClass"), \
+             patch.object(tool, "_is_whatsapp_preview_active", return_value=False), \
              patch.object(tool, "_copy_file_to_clipboard", return_value=True), \
              patch("pywinauto.keyboard.send_keys") as mock_keys:
             res = await tool.execute({
@@ -238,3 +239,26 @@ class TestVoiceQueueActiveFileAndDispatch:
             assert task.status == "completed"
             assert "Scheduled to send" in task.result
             assert "Rohan" in task.result
+
+    @pytest.mark.asyncio
+    async def test_voice_queue_followup_sends_video_with_inferred_recipient(self, tmp_path: Path):
+        queue = IdempotentTaskQueue()
+        test_video = tmp_path / "presentation.mp4"
+        test_video.write_text("fake video bytes")
+
+        # Prior task with recipient "bund"
+        prior_task = NemoTask(id="vf_prior", name="open whatsapp and find bund account and message him bye", status="completed")
+        queue.tasks.append(prior_task)
+
+        # Follow up command: "Can we just send this video?"
+        followup = NemoTask(id="vf_followup", name="Can we just send this video?", status="queued")
+
+        with patch.object(ActiveFileInspectorTool, "get_selected_files", return_value=[str(test_video)]), \
+             patch.object(MessagingDispatchTool, "_send_whatsapp", return_value={"success": True, "delivered": True, "method": "whatsapp_ui"}) as mock_wa:
+            await queue._run_task_worker(followup)
+            assert followup.status == "completed"
+            # Verify recipient was inferred as "bund" and target file was the selected video
+            mock_wa.assert_called_once()
+            args = mock_wa.call_args[0]
+            assert args[0] == "bund"
+            assert args[2] == test_video

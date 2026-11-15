@@ -299,7 +299,10 @@ class IdempotentTaskQueue:
                         self.on_state_change("sleeping", "Active File Found ✓")
 
                 # 5. Direct Smart Messaging & Active File Dispatch
-                elif cmd_lower.startswith("send") and any(kw in cmd_lower for kw in ("whatsapp", "telegram", "slack", "discord", "file to", "this file")):
+                elif (
+                    any(cmd_lower.startswith(pfx) for pfx in ("send", "can we send", "can we just send", "can you send", "please send", "dispatch", "message"))
+                    or any(kw in cmd_lower for kw in ("whatsapp", "telegram", "slack", "discord"))
+                ) and any(kw in cmd_lower for kw in ("whatsapp", "telegram", "slack", "discord", "file", "video", "document", "image", "photo", "pdf", "to ", "message", "this")):
                     from nemo.tools.builtin import MessagingDispatchTool
                     m_plat = "whatsapp"
                     for p in ("telegram", "slack", "discord", "email"):
@@ -309,14 +312,29 @@ class IdempotentTaskQueue:
 
                     m_rec = re.search(r"to\s+([A-Za-z0-9_\-+]+)", task.name, re.IGNORECASE)
                     recipient = m_rec.group(1).strip() if m_rec else ""
+                    if not recipient:
+                        # Follow-up context check: look for recipient in previous tasks (e.g. "can you message bund ...", then "send this video")
+                        cand_tasks = self.tasks if task not in self.tasks else self.tasks[:self.tasks.index(task)]
+                        for prev in reversed(cand_tasks):
+                            m_prev = re.search(r"(?:to|message|find)\s+([A-Za-z0-9_\-+]+)", prev.name, re.IGNORECASE)
+                            if m_prev:
+                                cand = m_prev.group(1).strip()
+                                if cand.lower() not in ("him", "her", "them", "whatsapp", "telegram", "slack", "discord", "the", "a"):
+                                    recipient = cand
+                                    break
 
                     m_t = re.search(r"(?:at|in)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d+\s*(?:m|min|minutes|hours))", task.name, re.IGNORECASE)
                     sched = m_t.group(1).strip() if m_t else ""
 
+                    # Extract custom message text if provided (e.g. "and also send him that read this" or "saying hello")
+                    msg_match = re.search(r"(?:that|saying|with message|say)\s+[\"']?([^\"']+)[\"']?$", task.name, re.IGNORECASE)
+                    msg_text = msg_match.group(1).strip() if msg_match else ""
+
                     tool = MessagingDispatchTool()
                     res = await tool.execute({
                         "platform": m_plat,
-                        "recipient": recipient or "Active Contact",
+                        "recipient": recipient or "active",
+                        "message": msg_text,
                         "file_path": "active",
                         "schedule_time": sched,
                     }, context={})
