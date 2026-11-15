@@ -263,6 +263,51 @@ class TestVoiceQueueActiveFileAndDispatch:
             assert args[0] == "bund"
             assert args[2] == test_video
 
+    @pytest.mark.asyncio
+    async def test_voice_queue_opens_whatsapp_chat_without_file_demands(self):
+        queue = IdempotentTaskQueue()
+        task = NemoTask(id="vq_open_gotham", name="Can you open WhatsApp and like show me Gotham?", status="queued")
+
+        with patch.object(ActiveFileInspectorTool, "get_selected_files", return_value=[]), \
+             patch.object(ActiveFileInspectorTool, "get_hovered_file", return_value=None), \
+             patch.object(MessagingDispatchTool, "_send_whatsapp", return_value={"success": True, "delivered": True, "method": "whatsapp_ui_search", "summary": "Opened WhatsApp chat with Gotham."}) as mock_wa:
+            await queue._run_task_worker(task)
+            assert task.status == "completed"
+            assert "Gotham" in task.result
+            mock_wa.assert_called_once()
+            args = mock_wa.call_args[0]
+            # recipient="Gotham", message="", file_path=None
+            assert args[0] == "Gotham"
+            assert args[1] == ""
+            assert args[2] is None
+
+    @pytest.mark.asyncio
+    async def test_voice_queue_opens_whatsapp_and_messages_contact(self):
+        queue = IdempotentTaskQueue()
+        task = NemoTask(id="vq_msg_bund", name="can you open whatsapp and find bund account and message him bye", status="queued")
+
+        with patch.object(ActiveFileInspectorTool, "get_selected_files", return_value=[]), \
+             patch.object(MessagingDispatchTool, "_send_whatsapp", return_value={"success": True, "delivered": True, "method": "whatsapp_ui_search", "summary": "Sent message to bund via Whatsapp successfully."}) as mock_wa:
+            await queue._run_task_worker(task)
+            assert task.status == "completed"
+            mock_wa.assert_called_once()
+            args = mock_wa.call_args[0]
+            # recipient="bund", message="bye", file_path=None
+            assert args[0] == "bund"
+            assert args[1] == "bye"
+            assert args[2] is None
+
+    @pytest.mark.asyncio
+    async def test_gui_automation_launch_whatsapp(self):
+        from nemo.tools.builtin import WindowsGuiTool
+        tool = WindowsGuiTool()
+        with patch("subprocess.Popen") as mock_popen:
+            res = await tool.execute({"action": "launch", "target": "WhatsApp"}, context={})
+            assert res.success is True
+            mock_popen.assert_called_once()
+            cmd = mock_popen.call_args[0][0]
+            assert "whatsapp:" in cmd
+
 
 class TestProjectDiscovery:
     @pytest.mark.asyncio

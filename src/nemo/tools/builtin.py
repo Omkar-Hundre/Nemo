@@ -5606,7 +5606,9 @@ class WindowsGuiTool(BaseTool):
                     return ToolResult(success=False, error="target parameter is required for 'launch' action.")
                 t_lower = target.lower().strip()
                 cmd = target
-                if t_lower in ("chrome", "google chrome", "google-chrome"):
+                if t_lower in ("whatsapp", "whats app", "whats up"):
+                    cmd = 'start "" "whatsapp:"'
+                elif t_lower in ("chrome", "google chrome", "google-chrome"):
                     chrome_candidates = [
                         Path(os.environ.get("PROGRAMFILES", "C:\\Program Files")) / "Google" / "Chrome" / "Application" / "chrome.exe",
                         Path(os.environ.get("PROGRAMFILES(X86)", "C:\\Program Files (x86)")) / "Google" / "Chrome" / "Application" / "chrome.exe",
@@ -6119,10 +6121,13 @@ class MessagingDispatchTool(BaseTool):
             found_hwnds: list[int] = []
 
             def _enum_cb(hwnd, _):
-                if win32gui.IsWindowVisible(hwnd):
-                    title = win32gui.GetWindowText(hwnd).strip()
-                    cname = win32gui.GetClassName(hwnd).lower()
-                    if target_keyword.lower() in title.lower() or target_keyword.lower() in cname:
+                title = win32gui.GetWindowText(hwnd).strip()
+                cname = win32gui.GetClassName(hwnd).lower()
+                # Windows UWP/WinUI windows (like WhatsApp Desktop) might have IsWindowVisible=0
+                # when behind other windows or cloaked, so match on non-empty title or class name
+                if (title or target_keyword.lower() in cname) and (target_keyword.lower() in title.lower() or target_keyword.lower() in cname):
+                    # Filter out background GDI+ hooks
+                    if "gdi+" not in cname and "gdi+" not in title.lower():
                         found_hwnds.append(hwnd)
 
             try:
@@ -6142,7 +6147,7 @@ class MessagingDispatchTool(BaseTool):
         if not target_hwnd:
             return None
 
-        # Force window to foreground using AttachThreadInput trick
+        # Force window to foreground using AttachThreadInput + Alt-key bypass
         try:
             if win32gui.IsIconic(target_hwnd):
                 win32gui.ShowWindow(target_hwnd, win32con.SW_RESTORE)
@@ -6159,9 +6164,13 @@ class MessagingDispatchTool(BaseTool):
                     user32.AttachThreadInput(cur_tid, target_tid, True)
                     if fore_tid:
                         user32.AttachThreadInput(fore_tid, target_tid, True)
+
+                    # Simulating Alt-key (VK_MENU=0x12) bypasses Windows SetForegroundWindow lock
+                    user32.keybd_event(0x12, 0, 0, 0)
                     user32.SetForegroundWindow(target_hwnd)
                     user32.BringWindowToTop(target_hwnd)
                     user32.SetFocus(target_hwnd)
+                    user32.keybd_event(0x12, 0, 2, 0)
                 finally:
                     user32.AttachThreadInput(cur_tid, target_tid, False)
                     if fore_tid:
@@ -6181,7 +6190,18 @@ class MessagingDispatchTool(BaseTool):
                     pass
             time.sleep(0.1)
 
-        return target_hwnd
+        # Confirm target is actually foreground before returning; avoid sending keystrokes to IDE
+        cur_fore = win32gui.GetForegroundWindow()
+        if cur_fore:
+            try:
+                cur_title = win32gui.GetWindowText(cur_fore).lower()
+                cur_class = win32gui.GetClassName(cur_fore).lower()
+                if cur_fore == target_hwnd or target_keyword.lower() in cur_title or target_keyword.lower() in cur_class:
+                    return cur_fore
+            except Exception:
+                pass
+
+        return None
 
     @staticmethod
     def _is_whatsapp_preview_active(wa_hwnd: int) -> bool:
@@ -6304,7 +6324,7 @@ class MessagingDispatchTool(BaseTool):
             except Exception as e:
                 return {"success": False, "error": f"Failed to attach/send file in WhatsApp: {e}"}
         else:
-            # Text-only message
+            # Text-only message or View/Open Chat
             if message and not is_phone:
                 try:
                     from pywinauto import keyboard
@@ -6313,6 +6333,11 @@ class MessagingDispatchTool(BaseTool):
                     time.sleep(1.0)
                 except Exception as e:
                     return {"success": False, "error": f"Failed to send text message in WhatsApp: {e}"}
+
+        if not message and not file_path:
+            clean_rec = recipient if recipient and recipient.lower() not in ("active", "current", "this chat", "chat", "open") else "active"
+            summary = f"Opened WhatsApp chat with {clean_rec}." if clean_rec != "active" else "Opened WhatsApp."
+            return {"success": True, "delivered": True, "action": "open_chat", "summary": summary, "method": "whatsapp_ui_search"}
 
         return {"success": True, "delivered": True, "method": "whatsapp_uri" if is_phone else "whatsapp_ui_search"}
 
@@ -6463,7 +6488,11 @@ class MessagingDispatchTool(BaseTool):
 
         file_desc = f"'{target_file.name}'" if target_file else "message"
         delivered = res.get("delivered", True)
-        summary = res.get("warning") if not delivered else f"Sent {file_desc} to {recipient} via {platform_choice.title()} successfully."
+        if not message and not target_file:
+            clean_rec = recipient if recipient and recipient.lower() not in ("active", "current", "this chat", "chat", "open") else "active"
+            summary = res.get("summary") or (f"Opened {clean_rec}'s {platform_choice.title()} chat." if clean_rec != "active" else f"Opened {platform_choice.title()}.")
+        else:
+            summary = res.get("warning") if not delivered else f"Sent {file_desc} to {recipient} via {platform_choice.title()} successfully."
         return ToolResult(
             success=True,
             data={

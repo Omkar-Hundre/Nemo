@@ -298,11 +298,11 @@ class IdempotentTaskQueue:
                     if self.on_state_change:
                         self.on_state_change("sleeping", "Active File Found ✓")
 
-                # 5. Direct Smart Messaging & Active File Dispatch
+                # 5. Direct Smart Messaging, Chat Navigation & File Dispatch
                 elif (
-                    any(cmd_lower.startswith(pfx) for pfx in ("send", "can we send", "can we just send", "can you send", "please send", "dispatch", "message"))
-                    or any(kw in cmd_lower for kw in ("whatsapp", "telegram", "slack", "discord"))
-                ) and any(kw in cmd_lower for kw in ("whatsapp", "telegram", "slack", "discord", "file", "video", "document", "image", "photo", "pdf", "to ", "message", "this")):
+                    any(cmd_lower.startswith(pfx) for pfx in ("send", "can we send", "can we just send", "can you send", "please send", "dispatch", "message", "tell", "show me"))
+                    or any(kw in cmd_lower for kw in ("whatsapp", "what's app", "whats up", "telegram", "slack", "discord"))
+                ) and any(kw in cmd_lower for kw in ("whatsapp", "what's app", "whats up", "telegram", "slack", "discord", "file", "video", "document", "image", "photo", "pdf", "to ", "message", "this", "chat", "show me", "account", "group")):
                     from nemo.tools.builtin import MessagingDispatchTool
                     m_plat = "whatsapp"
                     for p in ("telegram", "slack", "discord", "email"):
@@ -310,32 +310,74 @@ class IdempotentTaskQueue:
                             m_plat = p
                             break
 
-                    m_rec = re.search(r"to\s+([A-Za-z0-9_\-+]+)", task.name, re.IGNORECASE)
-                    recipient = m_rec.group(1).strip() if m_rec else ""
+                    # Determine if user explicitly requested sending a file or media
+                    has_file_kw = any(kw in cmd_lower for kw in (
+                        "file", "video", "document", "doc", "image", "photo", "pic", "pdf", "attachment", "this file", "this video", "send this"
+                    ))
+                    file_target = "active" if has_file_kw else None
+
+                    # Extract recipient contact or group name
+                    cleaned_name = re.sub(r"\b(in|on|via)?\s*(whatsapp|what'?s\s*app|whats\s*up|telegram|slack|discord)\b", "", task.name, flags=re.I)
+                    stopwords = {
+                        "whatsapp", "telegram", "slack", "discord", "the", "a", "an", "this", "that", "it",
+                        "him", "her", "them", "file", "video", "document", "photo", "image", "account",
+                        "chat", "app", "window", "mine", "saying", "with", "and", "say", "please"
+                    }
+                    recipient = ""
+                    rec_patterns = [
+                        r"(?:show\s+me|find)\s+([A-Za-z0-9_\-+]+(?:\s+[A-Za-z0-9_\-+]+)?)",
+                        r"(?:open)\s+([A-Za-z0-9_\-+]+(?:\s+[A-Za-z0-9_\-+]+)?)\'?s?\s+(?:chat|group|conversation|account)",
+                        r"(?:to|message|tell)\s+([A-Za-z0-9_\-+]+)",
+                    ]
+                    for pat in rec_patterns:
+                        m = re.search(pat, cleaned_name, re.I)
+                        if m:
+                            cand = m.group(1).strip()
+                            parts = [w for w in cand.split() if w.lower() not in stopwords]
+                            if parts:
+                                recipient = " ".join(parts)
+                                break
+
                     if not recipient:
-                        # Follow-up context check: look for recipient in previous tasks (e.g. "can you message bund ...", then "send this video")
+                        # Follow-up context check: look for recipient in previous tasks (e.g. "open whatsapp and find bund...", then "send this video")
                         cand_tasks = self.tasks if task not in self.tasks else self.tasks[:self.tasks.index(task)]
                         for prev in reversed(cand_tasks):
-                            m_prev = re.search(r"(?:to|message|find)\s+([A-Za-z0-9_\-+]+)", prev.name, re.IGNORECASE)
-                            if m_prev:
-                                cand = m_prev.group(1).strip()
-                                if cand.lower() not in ("him", "her", "them", "whatsapp", "telegram", "slack", "discord", "the", "a"):
-                                    recipient = cand
-                                    break
+                            prev_clean = re.sub(r"\b(in|on|via)?\s*(whatsapp|what'?s\s*app|whats\s*up|telegram|slack|discord)\b", "", prev.name, flags=re.I)
+                            for pat in rec_patterns:
+                                m_prev = re.search(pat, prev_clean, re.I)
+                                if m_prev:
+                                    cand = m_prev.group(1).strip()
+                                    parts = [w for w in cand.split() if w.lower() not in stopwords]
+                                    if parts:
+                                        recipient = " ".join(parts)
+                                        break
+                            if recipient:
+                                break
+
+                    # Extract custom message text (e.g. "and message him bye", "saying hello", "that read this")
+                    msg_text = ""
+                    msg_patterns = [
+                        r"(?:message\s+(?:him|her|them|[A-Za-z0-9_\-+]+)\s+)(.+)$",
+                        r"(?:tell\s+(?:him|her|them|[A-Za-z0-9_\-+]+)\s+)(.+)$",
+                        r"(?:saying|that|with message|say)\s+[\"']?([^\"']+)[\"']?$",
+                    ]
+                    for p in msg_patterns:
+                        m_msg = re.search(p, task.name, re.I)
+                        if m_msg:
+                            cand_msg = m_msg.group(1).strip(" .?!\"'")
+                            if cand_msg.lower() not in ("account", "chat", "window"):
+                                msg_text = cand_msg
+                                break
 
                     m_t = re.search(r"(?:at|in)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d+\s*(?:m|min|minutes|hours))", task.name, re.IGNORECASE)
                     sched = m_t.group(1).strip() if m_t else ""
-
-                    # Extract custom message text if provided (e.g. "and also send him that read this" or "saying hello")
-                    msg_match = re.search(r"(?:that|saying|with message|say)\s+[\"']?([^\"']+)[\"']?$", task.name, re.IGNORECASE)
-                    msg_text = msg_match.group(1).strip() if msg_match else ""
 
                     tool = MessagingDispatchTool()
                     res = await tool.execute({
                         "platform": m_plat,
                         "recipient": recipient or "active",
                         "message": msg_text,
-                        "file_path": "active",
+                        "file_path": file_target,
                         "schedule_time": sched,
                     }, context={})
                     task.status = "completed" if res.success else "failed"
@@ -344,7 +386,7 @@ class IdempotentTaskQueue:
                     if self.on_step:
                         self.on_step({"type": "finish", "answer": task.result})
                     if self.on_state_change:
-                        self.on_state_change("sleeping", "Dispatched ✓")
+                        self.on_state_change("sleeping", "Completed ✓")
 
                 # 6. Direct Project Discovery & App Launch
                 elif any(kw in cmd_lower for kw in ("open win unpacked", "win unpacked", "open project", "launch project", "open tool", "launch tool", "find project", "search project")) or (any(cmd_lower.startswith(p) for p in ("open ", "launch ", "start ", "run ")) and any(k in cmd_lower for k in ("clovi", "chloe", "version of", "unpacked", "project", "tool"))):
