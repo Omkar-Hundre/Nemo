@@ -490,3 +490,33 @@ class TestProjectDiscovery:
             assert task.status == "completed"
             assert "Clovi" in task.result
             mock_popen.assert_called_once()
+
+    def test_match_contact_name_phonetic_aliases(self):
+        from nemo.tools.builtin import MessagingDispatchTool
+
+        # Phonetic & spoken STT aliases
+        assert MessagingDispatchTool._match_contact_name("check bones task") == "Bundu"
+        assert MessagingDispatchTool._match_contact_name("goutam") == "Gautam"
+        assert MessagingDispatchTool._match_contact_name("bund's chat") == "bund"
+        assert MessagingDispatchTool._match_contact_name("gotham's chat") == "gotham"
+
+    @pytest.mark.asyncio
+    async def test_read_chat_uses_extracted_uia_messages(self):
+        from nemo.tools.builtin import MessagingDispatchTool
+
+        tool = MessagingDispatchTool()
+        with patch.object(tool, "_send_whatsapp", return_value={"success": True}), \
+             patch.object(tool, "_focus_app_window", return_value=12345), \
+             patch("nemo.tools.builtin.capture_desktop_screenshot_base64", return_value="fake_b64"), \
+             patch("nemo.ai.providers.nvidia.NvidiaNimProvider.analyze_image", return_value="Here are Bundu's recent tasks: PDF module 4 shared.") as mock_analyze:
+            res = await tool.execute({
+                "action": "read_chat",
+                "platform": "whatsapp",
+                "recipient": "bones",
+                "query": "check Bund task",
+            }, {})
+            assert res.success is True
+            assert "Bundu's recent tasks" in res.data["analysis"]
+            assert mock_analyze.call_count >= 1
+            first_prompt = mock_analyze.call_args_list[0][1]["prompt"]
+            assert "Bundu" in first_prompt or "bones" in first_prompt

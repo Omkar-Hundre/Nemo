@@ -6227,10 +6227,15 @@ class MessagingDispatchTool(BaseTool):
             try:
                 cur_title = win32gui.GetWindowText(cur_fore).lower()
                 cur_class = win32gui.GetClassName(cur_fore).lower()
-                if cur_fore == target_hwnd or "winuidesktopwin32windowclass" in cur_class or (target_keyword.lower() in cur_title and "antigravity" not in cur_title and "code" not in cur_class):
+                if "antigravity" in cur_title or "code" in cur_class:
+                    return None
+                if cur_fore == target_hwnd or "winuidesktopwin32windowclass" in cur_class or (target_keyword.lower() in cur_title):
                     return cur_fore
             except Exception:
                 pass
+
+        if target_hwnd and win32gui.IsWindow(target_hwnd):
+            return target_hwnd
 
         return None
 
@@ -6239,7 +6244,17 @@ class MessagingDispatchTool(BaseTool):
         """Find best matching contact name in WhatsApp's visible chat list if present."""
         if not query:
             return query
-        clean_q = re.sub(r"(?i)\b(account|chat|'s chat|'s|contact)\b", "", query).strip() or query
+        clean_q = re.sub(r"(?i)\b(account|chat|'s chat|'s task|'s|contact|task|tasks|posts|messages?)\b", "", query).strip() or query
+
+        # Common phonetic aliases from voice speech-to-text (e.g. Whisper hearing 'Bund' as 'bones')
+        phonetic_aliases = {
+            "bones": "Bundu",
+            "goutam": "Gautam",
+        }
+        for alias, target in phonetic_aliases.items():
+            if alias == clean_q.lower() or alias in clean_q.lower().split():
+                return target
+
         if not wa_hwnd:
             return clean_q
         try:
@@ -6339,7 +6354,11 @@ class MessagingDispatchTool(BaseTool):
                 search_term = matched_recipient.split()[0] if matched_recipient else recipient
                 navigated = False
                 try:
+                    import ctypes
+                    from ctypes import wintypes
+                    import win32con
                     from pywinauto import Desktop
+                    user32 = ctypes.windll.user32
                     app = Desktop(backend="uia").window(handle=wa_hwnd)
                     edits = app.descendants(control_type="Edit")
                     if edits:
@@ -6347,9 +6366,49 @@ class MessagingDispatchTool(BaseTool):
                         search_edit.set_focus()
                         search_edit.set_text(search_term)
                         time.sleep(1.0)
-                        search_edit.type_keys("{ENTER}")
-                        time.sleep(1.5)
-                        navigated = True
+
+                        # Find Chrome_WidgetWin_1 (the interactive Chromium canvas in WhatsApp Desktop)
+                        chrome_hwnd = None
+                        def _find_chrome(h, _):
+                            nonlocal chrome_hwnd
+                            if win32gui.GetClassName(h) == "Chrome_WidgetWin_1" and "whatsapp" in win32gui.GetWindowText(h).lower():
+                                chrome_hwnd = h
+                        try:
+                            h_desk_wa = user32.OpenDesktopW("Default", 0, False, 0x0040 | 0x0001 | 0x0002)
+                            if h_desk_wa:
+                                win32gui.EnumDesktopWindows(h_desk_wa, _find_chrome, None)
+                            else:
+                                win32gui.EnumWindows(_find_chrome, None)
+                        except Exception:
+                            pass
+
+                        # Locate the direct contact item under 'Chats' (NOT in 'Groups in common')
+                        target_rect = None
+                        clean_target = matched_recipient.lower()
+                        for it in app.descendants(control_type="DataItem"):
+                            txt = it.window_text().strip()
+                            r = it.rectangle()
+                            if r.left < 400 and r.top > 150:
+                                # Prioritize direct chat: matches search_term/matched_recipient and does not contain group indicators
+                                if (search_term.lower() in txt.lower() or clean_target in txt.lower()) and "also in this group" not in txt.lower():
+                                    target_rect = r
+                                    break
+
+                        if target_rect and chrome_hwnd:
+                            cx = (target_rect.left + target_rect.right) // 2
+                            cy = (target_rect.top + target_rect.bottom) // 2
+                            pt = wintypes.POINT(cx, cy)
+                            user32.ScreenToClient(chrome_hwnd, ctypes.byref(pt))
+                            lParam = (pt.y << 16) | (pt.x & 0xFFFF)
+                            user32.PostMessageW(chrome_hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lParam)
+                            time.sleep(0.05)
+                            user32.PostMessageW(chrome_hwnd, win32con.WM_LBUTTONUP, 0, lParam)
+                            time.sleep(1.5)
+                            navigated = True
+                        else:
+                            search_edit.type_keys("{ENTER}")
+                            time.sleep(1.2)
+                            navigated = True
                 except Exception:
                     navigated = False
 
@@ -6512,7 +6571,24 @@ class MessagingDispatchTool(BaseTool):
             self._send_telegram(recipient, message="", file_path=None)
         time.sleep(1.8)  # Let conversation messages fully render on screen
 
-        # 2. Multi-page capture: capture bottom messages, then scroll up to capture earlier messages
+        # 2. Extract direct UIA text messages from the active conversation pane
+        chat_messages: list[str] = []
+        if platform_choice == "whatsapp":
+            try:
+                wa_hwnd = self._focus_app_window("whatsapp", max_wait=3.0)
+                if wa_hwnd:
+                    from pywinauto import Desktop
+                    app = Desktop(backend="uia").window(handle=wa_hwnd)
+                    for c in app.descendants():
+                        r = c.rectangle()
+                        if r.left > 400 and r.top > 100 and r.bottom < 950:
+                            t = c.window_text().strip()
+                            if t and len(t) > 1 and t not in chat_messages and not t.startswith("wds-"):
+                                chat_messages.append(t)
+            except Exception:
+                pass
+
+        # 3. Multi-page capture: capture bottom messages, then scroll up to capture earlier messages
         screenshots: list[str] = []
         b64_initial = capture_desktop_screenshot_base64()
         if b64_initial:
@@ -6531,35 +6607,43 @@ class MessagingDispatchTool(BaseTool):
             except Exception:
                 pass
 
-        if not screenshots:
-            return {"success": False, "error": "Could not capture screen for chat analysis. Ensure active interactive session."}
+        if not screenshots and not chat_messages:
+            return {"success": False, "error": "Could not capture screen or chat messages for analysis. Ensure active interactive session."}
 
         profile_summary = ApplicantProfileManager.get_summary_text()
 
-        # 3. Vision-Language Analysis using Nvidia NIM
+        extracted_text_section = ""
+        if chat_messages:
+            extracted_text_section = "\nDirect Extracted Chat Messages / Elements:\n" + "\n".join(f"- {m}" for m in chat_messages) + "\n\n"
+
+        # 4. Vision-Language Analysis using Nvidia NIM
         analysis_prompt = (
             f"You are inspecting the active {platform_choice.title()} conversation/group with '{recipient}'.\n"
-            f"User request: {query or 'Scan recent posts, identify all job/internship opportunities, and tell me if I need to apply'}.\n\n"
+            f"User request: {query or 'Scan recent posts, identify all tasks, questions, or opportunities'}.\n\n"
+            f"{extracted_text_section}"
             f"Applicant Profile for Eligibility Matching:\n{profile_summary}\n\n"
             "Instructions:\n"
-            "1. Read all visible messages and posts across the captured chat views from top to bottom.\n"
-            "2. Identify ALL distinct placement / job / internship drives, opportunities, or off-campus posts mentioned.\n"
-            "3. For each opportunity, extract:\n"
+            "1. Read all visible messages, extracted text, and posts across the captured chat views from top to bottom.\n"
+            "2. Identify any tasks, assignments, notes, shared files (e.g. PDFs, documents), questions, or placement drives.\n"
+            "3. If inspecting a placement or job opportunity, extract:\n"
             "   - Company Name\n"
             "   - Role / Designation\n"
-            "   - Eligibility Criteria (Degree, Branches, CGPA / percentage cutoffs, Batch)\n"
+            "   - Eligibility Criteria\n"
             "   - Deadline / Last Date to Apply\n"
-            "   - Exact Application Link or Form URL (Google Forms, career links, etc.)\n"
-            "   - Eligibility Status for Applicant: State clearly 'Eligible' or 'Not Eligible' based on Omkar's profile (CGPA: 8.8, 10th: 90.2%, 12th: 85.2%, CSE 2027).\n"
-            "4. Provide a clear final recommendation list of companies the user SHOULD apply to, with clickable links and next steps.\n"
-            "5. If a drive has already concluded or no active application link exists, state that clearly.\n"
-            "6. Present your findings in a structured, clean format."
+            "   - Exact Application Link or Form URL\n"
+            "   - Eligibility Status for Omkar (CGPA: 8.8, 10th: 90.2%, 12th: 85.2%, CSE 2027)\n"
+            "4. If inspecting a direct conversation with a friend or colleague (e.g. Bundu, Gautam):\n"
+            "   - Summarize the exact recent messages, tasks requested, files shared (e.g. module PDFs), and any action items.\n"
+            "5. Present your findings in a structured, clean format."
         )
 
         try:
             from nemo.ai.providers.nvidia import NvidiaNimProvider
             provider = NvidiaNimProvider()
-            analysis_text = await provider.analyze_image(image_base64=screenshots[0], prompt=analysis_prompt)
+            if screenshots:
+                analysis_text = await provider.analyze_image(image_base64=screenshots[0], prompt=analysis_prompt)
+            else:
+                analysis_text = await provider.generate_response(analysis_prompt)
 
             if len(screenshots) > 1:
                 older_prompt = (
