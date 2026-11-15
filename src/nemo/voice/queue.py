@@ -49,19 +49,23 @@ class IdempotentTaskQueue:
         on_state_change: Callable[[str, str], Any] | None = None,
         on_tasks_updated: Callable[[list[dict[str, Any]]], Any] | None = None,
         on_step: Callable[[dict[str, Any]], Any] | None = None,
+        max_concurrency: int = 4,
     ) -> None:
         self.on_state_change = on_state_change
         self.on_tasks_updated = on_tasks_updated
         self.on_step = on_step
+        self.max_concurrency = max_concurrency
 
         self.tasks: list[NemoTask] = []
         self._recent_commands: dict[str, float] = {}
+        self._active_futures: dict[str, asyncio.Task] = {}
         self._current_task: NemoTask | None = None
         self._current_future: asyncio.Task | None = None
         self._queue: asyncio.Queue[NemoTask] = asyncio.Queue()
         self._lock = threading.Lock()
         self._running = False
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._semaphore: asyncio.Semaphore | None = None
 
     def start_worker(self, loop: asyncio.AbstractEventLoop) -> None:
         """Start background queue processing consumer."""
@@ -80,8 +84,19 @@ class IdempotentTaskQueue:
         if not cmd:
             return None
 
-        # Check Tier 1: Stop / Cancel keywords
-        normalized = cmd.lower()
+        # Check Tier 1: Stop / Cancel keywords or Polite Boundary Guard
+        normalized = cmd.lower().rstrip(".!?,")
+        DISMISSAL_PHRASES = (
+            "not now", "not now nemo", "later", "later nemo",
+            "quiet", "keep quiet", "shut up", "leave me alone",
+            "stop talking", "be quiet",
+        )
+        if any(normalized == dp or normalized.startswith(dp) for dp in DISMISSAL_PHRASES):
+            self.cancel_all()
+            if self.on_state_change:
+                self.on_state_change("sleeping", "Sorry! I'll keep quiet. Let me know when you need me.")
+            return None
+
         if normalized in ("stop", "cancel", "abort", "kill", "stop all", "cancel task"):
             self.cancel_all()
             if self.on_state_change:
@@ -91,7 +106,9 @@ class IdempotentTaskQueue:
         # Check Tier 2: Status check
         if normalized in ("status", "what are you doing", "what is running", "show processes"):
             if self.on_state_change:
-                msg = f"Running: {self._current_task.name}" if self._current_task else "All tasks idle"
+                with self._lock:
+                    active_count = len(self._active_futures)
+                msg = f"{active_count} task(s) active" if active_count else "All tasks idle"
                 self.on_state_change("sleeping", msg)
             return None
 
@@ -122,8 +139,9 @@ class IdempotentTaskQueue:
             for task in self.tasks:
                 if task.id == task_id:
                     task.status = "cancelled"
-                    if self._current_task and self._current_task.id == task_id and self._current_future:
-                        self._current_future.cancel()
+                    fut = self._active_futures.get(task_id)
+                    if fut:
+                        fut.cancel()
                     self._notify_tasks()
                     return True
         return False
@@ -131,17 +149,19 @@ class IdempotentTaskQueue:
     def cancel_all(self) -> None:
         """Cancel all running and queued tasks."""
         with self._lock:
-            if self._current_task and self._current_task.status == "running":
-                self._current_task.status = "cancelled"
-                if self._current_future:
-                    self._current_future.cancel()
+            for fut in list(self._active_futures.values()):
+                fut.cancel()
+            self._active_futures.clear()
             for task in self.tasks:
-                if task.status == "queued":
+                if task.status in ("queued", "running"):
                     task.status = "cancelled"
+            self._current_task = None
         self._notify_tasks()
 
     async def _process_queue_loop(self) -> None:
-        """Continuously pulls tasks from queue and executes via AgentOrchestrator."""
+        """Pulls tasks from queue and executes them concurrently using worker pool."""
+        self._semaphore = asyncio.Semaphore(self.max_concurrency)
+
         while self._running:
             try:
                 task = await self._queue.get()
@@ -149,103 +169,140 @@ class IdempotentTaskQueue:
                     self._queue.task_done()
                     continue
 
-                task.status = "running"
-                self._current_task = task
-                self._notify_tasks()
-
-                if self.on_state_change:
-                    display_title = task.name if len(task.name) <= 24 else task.name[:21] + "..."
-                    self.on_state_change("working", f"Executing: {display_title}")
-
-                try:
-                    cmd_lower = task.name.strip().lower().rstrip(".!?,")
-
-                    # 1. Polite dismissal & boundary awareness
-                    if cmd_lower in (
-                        "not now", "not now nemo", "later", "later nemo",
-                        "quiet", "keep quiet", "shut up", "leave me alone",
-                        "stop talking", "be quiet", "pause",
-                    ):
-                        task.status = "completed"
-                        task.result = "Sorry! I'll keep quiet. Let me know when you need me."
-                        task.completed_at = time.time()
-                        if self.on_step:
-                            self.on_step({"type": "finish", "answer": task.result})
-                        if self.on_state_change:
-                            self.on_state_change("sleeping", "Nemo: Kept Quiet (Paused)")
-
-                    # 2. Knowledge graph inspection via voice
-                    elif cmd_lower in (
-                        "show me the memory graph", "show memory graph", "show memory",
-                        "who am i", "what do you know about me", "show profile",
-                    ):
-                        from nemo.memory.graph import MemoryGraph
-                        graph = MemoryGraph()
-                        data = await graph.get_graph_data()
-                        prof = data.get("profile", {})
-                        task.status = "completed"
-                        task.result = (
-                            f"You are {prof.get('name', 'Developer')}. I know your preferences: "
-                            f"{prof.get('preferences', {}).get('browser', 'Brave')} browser, "
-                            f"{prof.get('preferences', {}).get('ide', 'Antigravity IDE')}, "
-                            f"and {data.get('triplets_count', 0)} knowledge graph relations."
-                        )
-                        task.completed_at = time.time()
-                        if self.on_step:
-                            self.on_step({"type": "finish", "answer": task.result})
-                        if self.on_state_change:
-                            self.on_state_change("sleeping", "Knowledge Graph Ready ✓")
-
-                    elif cmd_lower in ("undo", "undo that", "revert", "revert that", "rollback"):
-                        from nemo.execution.journal import OperationJournal
-                        res = OperationJournal().undo_last(1)
-                        task.status = "completed" if res.get("success") else "failed"
-                        task.result = res.get("message", "Undo complete.")
-                        task.completed_at = time.time()
-                        if self.on_step:
-                            self.on_step({"type": "finish", "answer": task.result})
-                        if self.on_state_change:
-                            self.on_state_change("sleeping", f"Undo: {task.result}")
-
-                    elif cmd_lower in ("productive mode", "start productive mode", "focus mode", "developer mode"):
-                        from nemo.tools.builtin import ProductiveModeTool
-                        tool = ProductiveModeTool()
-                        res = await tool.execute({}, context={})
-                        task.status = "completed" if res.success else "failed"
-                        task.result = (res.data or {}).get("briefing", "Productive mode active.")
-                        task.completed_at = time.time()
-                        if self.on_step:
-                            self.on_step({"type": "finish", "answer": task.result})
-                        if self.on_state_change:
-                            self.on_state_change("sleeping", "Productive Mode ✓")
-                    else:
-                        # Execute task via AgentOrchestrator
-                        orchestrator = AgentOrchestrator()
-                        self._current_future = asyncio.current_task()
-                        state = await orchestrator.run(objective=task.name, on_step=self.on_step)
-                        task.status = "completed"
-                        task.result = state.final_answer or "Success"
-                        task.completed_at = time.time()
-                        if self.on_state_change:
-                            self.on_state_change("sleeping", "Task Complete ✓")
-                except asyncio.CancelledError:
-                    task.status = "cancelled"
-                    if self.on_state_change:
-                        self.on_state_change("sleeping", "Task Cancelled")
-                except Exception as e:
-                    task.status = "failed"
-                    task.result = str(e)
-                    if self.on_state_change:
-                        self.on_state_change("sleeping", f"Error: {e}")
-                finally:
-                    self._current_task = None
-                    self._current_future = None
-                    self._notify_tasks()
-                    self._queue.task_done()
+                # Execute asynchronously via concurrent task worker
+                worker_task = asyncio.create_task(self._run_task_worker(task))
+                with self._lock:
+                    self._active_futures[task.id] = worker_task
 
             except Exception as e:
                 logger.error("Error in task queue runner: %s", e)
                 await asyncio.sleep(0.5)
+
+    async def _run_task_worker(self, task: NemoTask) -> None:
+        """Execute single task under concurrency semaphore."""
+        if not self._semaphore:
+            self._semaphore = asyncio.Semaphore(self.max_concurrency)
+
+        async with self._semaphore:
+            task.status = "running"
+            with self._lock:
+                self._current_task = task
+            self._notify_tasks()
+
+            if self.on_state_change:
+                display_title = task.name if len(task.name) <= 24 else task.name[:21] + "..."
+                self.on_state_change("working", f"Executing: {display_title}")
+
+            try:
+                cmd_lower = task.name.strip().lower().rstrip(".!?,")
+
+                # 1. Polite dismissal & boundary awareness
+                if cmd_lower in (
+                    "not now", "not now nemo", "later", "later nemo",
+                    "quiet", "keep quiet", "shut up", "leave me alone",
+                    "stop talking", "be quiet", "pause",
+                ):
+                    task.status = "completed"
+                    task.result = "Sorry! I'll keep quiet. Let me know when you need me."
+                    task.completed_at = time.time()
+                    if self.on_step:
+                        self.on_step({"type": "finish", "answer": task.result})
+                    if self.on_state_change:
+                        self.on_state_change("sleeping", "Nemo: Kept Quiet (Paused)")
+
+                # 2. Direct preference ingestion into Knowledge Graph (Zero NIM API tokens)
+                elif any(cmd_lower.startswith(pfx) for pfx in ("i prefer", "my favorite", "remember that", "set my")):
+                    from nemo.memory.extractor import MemoryExtractor
+                    from nemo.memory.repository import MemoryRepository
+                    mem_repo = MemoryRepository()
+                    local_triplets = MemoryExtractor._local_rule_extract(task.name, "")
+                    count = 0
+                    for item in local_triplets:
+                        await mem_repo.add_triplet(
+                            subject=str(item.get("subject") or "Omkar"),
+                            predicate=str(item.get("predicate") or "preference"),
+                            obj=str(item.get("object") or item.get("content")),
+                            content=item.get("content"),
+                            memory_type="preference",
+                        )
+                        count += 1
+                    task.status = "completed"
+                    task.result = f"Understood! Stored {count} preference(s) into your Knowledge Graph." if count else "Noted and saved into your memory graph."
+                    task.completed_at = time.time()
+                    if self.on_step:
+                        self.on_step({"type": "finish", "answer": task.result})
+                    if self.on_state_change:
+                        self.on_state_change("sleeping", "Knowledge Graph Updated ✓")
+
+                # 3. Knowledge graph inspection via voice
+                elif cmd_lower in (
+                    "show me the memory graph", "show memory graph", "show memory",
+                    "who am i", "what do you know about me", "show profile",
+                ):
+                    from nemo.memory.graph import MemoryGraph
+                    graph = MemoryGraph()
+                    data = await graph.get_graph_data()
+                    prof = data.get("profile", {})
+                    task.status = "completed"
+                    task.result = (
+                        f"You are {prof.get('name', 'Developer')}. I know your preferences: "
+                        f"{prof.get('preferences', {}).get('browser', 'Brave')} browser, "
+                        f"{prof.get('preferences', {}).get('ide', 'Antigravity IDE')}, "
+                        f"and {data.get('triplets_count', 0)} knowledge graph relations."
+                    )
+                    task.completed_at = time.time()
+                    if self.on_step:
+                        self.on_step({"type": "finish", "answer": task.result})
+                    if self.on_state_change:
+                        self.on_state_change("sleeping", "Knowledge Graph Ready ✓")
+
+                elif cmd_lower in ("undo", "undo that", "revert", "revert that", "rollback"):
+                    from nemo.execution.journal import OperationJournal
+                    res = OperationJournal().undo_last(1)
+                    task.status = "completed" if res.get("success") else "failed"
+                    task.result = res.get("message", "Undo complete.")
+                    task.completed_at = time.time()
+                    if self.on_step:
+                        self.on_step({"type": "finish", "answer": task.result})
+                    if self.on_state_change:
+                        self.on_state_change("sleeping", f"Undo: {task.result}")
+
+                elif cmd_lower in ("productive mode", "start productive mode", "focus mode", "developer mode"):
+                    from nemo.tools.builtin import ProductiveModeTool
+                    tool = ProductiveModeTool()
+                    res = await tool.execute({}, context={})
+                    task.status = "completed" if res.success else "failed"
+                    task.result = (res.data or {}).get("briefing", "Productive mode active.")
+                    task.completed_at = time.time()
+                    if self.on_step:
+                        self.on_step({"type": "finish", "answer": task.result})
+                    if self.on_state_change:
+                        self.on_state_change("sleeping", "Productive Mode ✓")
+                else:
+                    # Execute task via AgentOrchestrator
+                    orchestrator = AgentOrchestrator()
+                    state = await orchestrator.run(objective=task.name, on_step=self.on_step)
+                    task.status = "completed"
+                    task.result = state.final_answer or "Success"
+                    task.completed_at = time.time()
+                    if self.on_state_change:
+                        self.on_state_change("sleeping", "Task Complete ✓")
+            except asyncio.CancelledError:
+                task.status = "cancelled"
+                if self.on_state_change:
+                    self.on_state_change("sleeping", "Task Cancelled")
+            except Exception as e:
+                task.status = "failed"
+                task.result = str(e)
+                if self.on_state_change:
+                    self.on_state_change("sleeping", f"Error: {e}")
+            finally:
+                with self._lock:
+                    self._active_futures.pop(task.id, None)
+                    if self._current_task and self._current_task.id == task.id:
+                        self._current_task = None
+                self._notify_tasks()
+                self._queue.task_done()
 
     def _notify_tasks(self) -> None:
         """Broadcast updated task list to UI."""

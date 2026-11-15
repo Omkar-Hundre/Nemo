@@ -34,9 +34,11 @@ class NemoVoiceService:
         enable_tts: bool = True,
         show_panel: bool = True,
         autostart: bool = False,
+        enable_proactive: bool = True,
     ) -> None:
         self.enable_voice = enable_voice
         self.enable_tts = enable_tts
+        self.enable_proactive = enable_proactive
         self.model_size = model_size
         self.show_panel = show_panel
 
@@ -47,9 +49,12 @@ class NemoVoiceService:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._loop_thread: threading.Thread | None = None
         self._speech_thread: threading.Thread | None = None
+        self._proactive_thread: threading.Thread | None = None
 
         self._wake_active_until = 0.0
         self.WAKE_WINDOW_SEC = 8.0
+        self._proactive_silenced_until = 0.0
+        self._last_proactive_checkin = time.time()
 
         # Text-To-Speech Synthesizer
         self.tts = NemoTtsEngine() if self.enable_tts else None
@@ -96,7 +101,12 @@ class NemoVoiceService:
             if self.tts:
                 self.tts.speak("Nemo voice assistant is active and listening.")
 
-        # 4. Show minimal bottom-right Action Panel pill
+        # 4. Start Proactive Companion Worker
+        if self.enable_proactive and self.tts:
+            self._proactive_thread = threading.Thread(target=self._proactive_worker_loop, daemon=True)
+            self._proactive_thread.start()
+
+        # 5. Show minimal bottom-right Action Panel pill
         if self.panel:
             self.panel.start(block=block)
         elif block:
@@ -154,6 +164,22 @@ class NemoVoiceService:
                 now = time.time()
                 is_currently_awake = (now < self._wake_active_until)
 
+                cmd_text = (command or text).strip().lower().rstrip(".!?,")
+                DISMISSAL_PHRASES = (
+                    "not now", "not now nemo", "later nemo", "later",
+                    "quiet", "keep quiet", "shut up", "leave me alone",
+                    "stop talking", "be quiet", "pause",
+                )
+                if any(cmd_text == dp or cmd_text.startswith(dp) for dp in DISMISSAL_PHRASES):
+                    self._proactive_silenced_until = now + 1800.0
+                    self._wake_active_until = 0.0
+                    console.print("[dim]Polite Boundary: Nemo proactive speaking silenced for 30m.[/dim]")
+                    if self.panel:
+                        self.panel.update_status("sleeping", "Nemo: Kept Quiet (Paused)")
+                    if self.tts:
+                        self.tts.speak("Sorry! I'll keep quiet. Let me know when you need me.")
+                    continue
+
                 if has_wake:
                     self._wake_active_until = now + self.WAKE_WINDOW_SEC
                     console.print(f"[bold cyan][HEARD][/bold cyan] Wake word detected: '{text}'")
@@ -171,6 +197,40 @@ class NemoVoiceService:
 
             except Exception as e:
                 logger.error("Error transcribing speech chunk: %s", e)
+
+    def _proactive_worker_loop(self) -> None:
+        """Periodic background companion that checks for knowledge gaps and deepens memory."""
+        inquiry_questions = [
+            "Hey Omkar, quick question for my memory graph — which test runner do you prefer for our Python tests?",
+            "Hey Omkar, would you like me to keep automatic project backups on D: drive?",
+            "Hey Omkar, are you planning to deploy our landing page to Netlify or host it locally?",
+            "Hey Omkar, should I keep terminal status outputs minimal or verbose?",
+        ]
+        q_idx = 0
+        while not self._stop_event.is_set():
+            time.sleep(10.0)
+            now = time.time()
+            if not self.enable_proactive or not self.tts:
+                continue
+
+            # Respect polite boundary cooldown
+            if now < self._proactive_silenced_until:
+                continue
+
+            # Check if idle for at least 120s
+            is_idle = (
+                not self.task_queue.tasks or 
+                all(t.status in ("completed", "cancelled", "failed") for t in self.task_queue.tasks)
+            )
+            if is_idle and (now - self._last_proactive_checkin) > 120.0:
+                self._last_proactive_checkin = now
+                question = inquiry_questions[q_idx % len(inquiry_questions)]
+                q_idx += 1
+                console.print(f"\n[bold cyan][NEMO INQUIRY][/bold cyan] {question}")
+                if self.panel:
+                    self.panel.update_status("listening", "Nemo: Inquiring...")
+                self.tts.speak(question)
+                self._wake_active_until = now + 15.0
 
     def _on_agent_step(self, event: dict[str, Any]) -> None:
         """Handle real-time step streaming, thoughts, and outcomes from AgentOrchestrator."""

@@ -85,6 +85,60 @@ class TestIdempotentTaskQueue:
         assert cancelled is True
         assert task.status == "cancelled"
 
+    def test_polite_boundary_guard(self):
+        state_mock = MagicMock()
+        queue = IdempotentTaskQueue(on_state_change=state_mock)
+
+        for phrase in ("not now nemo", "later nemo", "quiet", "keep quiet", "shut up", "leave me alone"):
+            res = queue.submit_command(phrase)
+            assert res is None
+            state_mock.assert_called_with("sleeping", "Sorry! I'll keep quiet. Let me know when you need me.")
+
+    @pytest.mark.asyncio
+    async def test_concurrent_execution_multithreading(self):
+        queue = IdempotentTaskQueue(max_concurrency=4)
+        assert queue.max_concurrency == 4
+
+        task1 = NemoTask(id="t1", name="sleep task 1", status="queued")
+        task2 = NemoTask(id="t2", name="sleep task 2", status="queued")
+        task3 = NemoTask(id="t3", name="sleep task 3", status="queued")
+
+        executed = []
+
+        async def _mock_run(t):
+            executed.append(t.id)
+            await asyncio.sleep(0.01)
+
+        with patch.object(queue, "_run_task_worker", side_effect=_mock_run):
+            loop = asyncio.get_running_loop()
+            queue.start_worker(loop)
+            await queue._queue.put(task1)
+            await queue._queue.put(task2)
+            await queue._queue.put(task3)
+            await asyncio.sleep(0.05)
+            queue.stop_worker()
+
+        assert len(executed) == 3
+
+    def test_local_rule_memory_extraction(self):
+        from nemo.memory.extractor import MemoryExtractor
+
+        # Test IDE preference
+        triplets = MemoryExtractor._local_rule_extract("I use Antigravity IDE", "Setup completed.")
+        assert any(t["subject"] == "Omkar" and "Antigravity" in t["object"] for t in triplets)
+
+        # Test Browser preference
+        triplets_b = MemoryExtractor._local_rule_extract("Open Brave browser", "Navigated to localhost.")
+        assert any("Brave" in t["object"] for t in triplets_b)
+
+        # Test port extraction
+        triplets_p = MemoryExtractor._local_rule_extract("Start backend server", "Running on port 8000.")
+        assert any(t["predicate"] == "port" and t["object"] == "8000" for t in triplets_p)
+
+        # Test framework extraction
+        triplets_f = MemoryExtractor._local_rule_extract("Scaffold project", "Configured with FastAPI.")
+        assert any(t["predicate"] == "framework" and "FASTAPI" in t["object"].upper() for t in triplets_f)
+
 
 class TestAutostart:
     def test_autostart_toggle(self):

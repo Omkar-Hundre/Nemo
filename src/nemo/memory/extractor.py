@@ -4,6 +4,7 @@
 import json
 from pathlib import Path
 import re
+import time
 from typing import Any
 
 # 2. Third-party imports
@@ -27,6 +28,9 @@ class ExtractedMemory(BaseModel):
 class MemoryExtractor:
     """Extracts durable technical facts and decisions from agent workflows."""
 
+    _last_nim_call_time: float = 0.0
+    NIM_RATE_LIMIT_COOLDOWN_SEC: float = 120.0
+
     def __init__(
         self,
         provider: NvidiaNimProvider | None = None,
@@ -34,6 +38,84 @@ class MemoryExtractor:
     ) -> None:
         self.provider = provider or NvidiaNimProvider()
         self.repo = repository or MemoryRepository()
+
+    @staticmethod
+    def _local_rule_extract(objective: str, outcome: str) -> list[dict[str, Any]]:
+        """Zero-cost local pattern extractor for preferences and architectural choices."""
+        combined = f"{objective}\n{outcome}"
+        triplets: list[dict[str, Any]] = []
+
+        # 1. Editor / IDE preference
+        combined_lower = combined.lower()
+        if "editor" in combined_lower or "ide" in combined_lower:
+            for known in ("antigravity ide", "antigravity", "vscode", "vs code", "cursor", "pycharm", "neovim"):
+                if known in combined_lower:
+                    obj_name = "Antigravity IDE" if "antigravity" in known else ("VS Code" if "vs" in known else known.title())
+                    triplets.append({
+                        "subject": "Omkar",
+                        "predicate": "uses_editor",
+                        "object": obj_name,
+                        "content": f"Developer uses {obj_name} as primary editor.",
+                        "type": "preference",
+                        "importance": 1.0,
+                    })
+                    break
+
+        # 2. Browser preference
+        if "browser" in combined_lower:
+            for known in ("brave", "chrome", "firefox", "edge", "safari"):
+                if known in combined_lower:
+                    triplets.append({
+                        "subject": "Omkar",
+                        "predicate": "prefers_browser",
+                        "object": f"{known.title()} Browser",
+                        "content": f"Developer prefers {known.title()} browser.",
+                        "type": "preference",
+                        "importance": 1.0,
+                    })
+                    break
+
+        # 3. Direct statements ("I prefer X", "My favorite X is Y", "Remember that X")
+        m_pref = re.search(r"(?:i prefer|my favorite|always use|remember that|we use)\s+([^.]+)", combined, re.IGNORECASE)
+        if m_pref:
+            stmt = m_pref.group(1).strip()
+            if 3 < len(stmt) < 70:
+                triplets.append({
+                    "subject": "Developer",
+                    "predicate": "preference",
+                    "object": stmt,
+                    "content": f"Developer preference: {stmt}.",
+                    "type": "preference",
+                    "importance": 1.0,
+                })
+
+        # 4. Port configuration
+        m_port = re.search(r"(?:port)\s*(?:is|=|:|\s)\s*(\d{2,5})", combined, re.IGNORECASE)
+        if m_port:
+            p_val = m_port.group(1)
+            triplets.append({
+                "subject": "Project",
+                "predicate": "port",
+                "object": p_val,
+                "content": f"Project runs on port {p_val}.",
+                "type": "fact",
+                "importance": 0.9,
+            })
+
+        # 5. Frameworks
+        for fw in ("fastapi", "react", "next.js", "tailwind", "pyside6", "rich"):
+            if fw in combined.lower():
+                triplets.append({
+                    "subject": "Project",
+                    "predicate": "framework",
+                    "object": fw.upper() if len(fw) <= 4 else fw.title(),
+                    "content": f"Project utilizes {fw}.",
+                    "type": "decision",
+                    "importance": 0.9,
+                })
+                break
+
+        return triplets
 
     async def extract_and_persist(
         self,
@@ -44,9 +126,51 @@ class MemoryExtractor:
         scope: str = "project",
     ) -> list[MemoryItem]:
         """Extract key technical facts/decisions and auto-persist to repository."""
-        # Only run if meaningful observations or substantive outcome occurred
+        # 1. Zero-cost local rule extraction first (consumes 0 NIM tokens, 0ms latency)
+        local_items = self._local_rule_extract(objective, outcome)
+        if local_items:
+            persisted: list[MemoryItem] = []
+            for item in local_items:
+                content = str(item.get("content", "")).strip()
+                subj = str(item.get("subject") or "Project")
+                pred = str(item.get("predicate") or "decision")
+                obj_val = str(item.get("object") or content[:40])
+
+                # Deduplicate: check if exact triplet or content already exists
+                existing = await self.repo.search_memories(content, project_id=project_id, limit=5)
+                if any(
+                    e.content.strip().lower() == content.lower() or
+                    (
+                        e.subject and e.subject.lower() == subj.lower() and
+                        e.predicate and e.predicate.lower() == pred.lower() and
+                        e.object and e.object.lower() == obj_val.lower()
+                    )
+                    for e in existing
+                ):
+                    continue
+
+                saved = await self.repo.add_triplet(
+                    subject=subj,
+                    predicate=pred,
+                    obj=obj_val,
+                    content=content,
+                    memory_type=str(item.get("type", "fact")),
+                    importance=float(item.get("importance", 1.0)),
+                    scope=scope,
+                    project_id=project_id,
+                    metadata={"auto_extracted": True, "source": "local_rule"},
+                )
+                persisted.append(saved)
+            return persisted
+
+        # Only run LLM if substantive outcome occurred and NIM cooldown has passed
         if not observations and len(outcome.strip()) < 30:
             return []
+
+        now = time.time()
+        if isinstance(self.provider, NvidiaNimProvider) and (now - MemoryExtractor._last_nim_call_time) < self.NIM_RATE_LIMIT_COOLDOWN_SEC:
+            return []
+        MemoryExtractor._last_nim_call_time = now
 
         # Build concise extraction prompt
         obs_snippets = []

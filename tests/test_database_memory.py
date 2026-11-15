@@ -47,18 +47,19 @@ async def create_test_db():
                 yield sess
                 await sess.commit()
 
-        yield {
-            "tmpdir": Path(tmpdir),
-            "engine": engine,
-            "session_provider": session_provider,
-            "proj_repo": ProjectRepository(session_provider=session_provider),
-            "mem_repo": MemoryRepository(session_provider=session_provider),
-            "conv_repo": ConversationRepository(session_provider=session_provider),
-            "task_repo": TaskRepository(session_provider=session_provider),
-            "user_repo": UserProfileRepository(session_provider=session_provider),
-        }
-
-        await engine.dispose()
+        try:
+            yield {
+                "tmpdir": Path(tmpdir),
+                "engine": engine,
+                "session_provider": session_provider,
+                "proj_repo": ProjectRepository(session_provider=session_provider),
+                "mem_repo": MemoryRepository(session_provider=session_provider),
+                "conv_repo": ConversationRepository(session_provider=session_provider),
+                "task_repo": TaskRepository(session_provider=session_provider),
+                "user_repo": UserProfileRepository(session_provider=session_provider),
+            }
+        finally:
+            await engine.dispose()
 
 
 @pytest.mark.asyncio

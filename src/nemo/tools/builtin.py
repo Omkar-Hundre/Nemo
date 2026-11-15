@@ -585,28 +585,41 @@ class FileOperationsTool(BaseTool):
             errors: list[str] = []
             total_bytes = 0
 
-            for s_raw in sources:
+            import concurrent.futures
+
+            def _transfer_single(s_raw: str):
                 s_path = self._resolve_path(s_raw, base_dir)
                 if not s_path.exists():
-                    errors.append(f"Not found: {s_path}")
-                    continue
+                    return False, f"Not found: {s_path}", 0, None
                 if not self.policy.is_path_safe(s_path, base_dir):
-                    errors.append(f"Security blocked: {s_path}")
-                    continue
+                    return False, f"Security blocked: {s_path}", 0, None
 
                 try:
                     dest_file = target_dir / s_path.name
                     if op == "move":
                         shutil.move(str(s_path), str(dest_file))
+                        sz = dest_file.stat().st_size if dest_file.is_file() else 0
                     else:
                         if s_path.is_dir():
                             shutil.copytree(s_path, dest_file, dirs_exist_ok=True)
+                            sz = 0
                         else:
                             shutil.copy2(s_path, dest_file)
-                            total_bytes += dest_file.stat().st_size
-                    transferred.append(str(dest_file))
+                            sz = dest_file.stat().st_size
+                    return True, None, sz, str(dest_file)
                 except Exception as ex:
-                    errors.append(f"{s_path.name}: {ex}")
+                    return False, f"{s_path.name}: {ex}", 0, None
+
+            max_w = min(8, len(sources)) or 1
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+                results = list(executor.map(_transfer_single, sources))
+
+            for success, err, sz, dst_str in results:
+                if success and dst_str:
+                    transferred.append(dst_str)
+                    total_bytes += sz
+                elif err:
+                    errors.append(err)
 
             if transferred:
                 try:

@@ -79,35 +79,20 @@ class UnifiedMemoryRAG:
         self._bootstrapped = True
 
     async def search_historical_tasks(self, query: str, limit: int = 4) -> list[dict[str, Any]]:
-        """Semantically search past tasks executed days, weeks, or months ago."""
+        """Semantically search past tasks executed days, weeks, or months ago using zero-cost local vectorizer."""
         tasks = await self.task_repo.list_tasks(limit=120)
         if not tasks:
             return []
 
-        # Try dense embeddings if available
-        query_dense = await self.embed_provider.embed_query(query)
+        # Zero-cost, sub-millisecond local character/word n-gram cosine vectorizer (protects NIM rate limits)
+        q_vec = _char_ngram_vector(query)
         scored_tasks: list[tuple[float, Any]] = []
-
-        if query_dense:
-            task_texts = [f"{t.objective} ({t.status})" for t in tasks[:32]]
-            try:
-                task_embeddings = await self.embed_provider.embed_documents(task_texts)
-                for t, emb in zip(tasks[:32], task_embeddings):
-                    sim = cosine_similarity(query_dense, emb)
-                    scored_tasks.append((sim, t))
-            except Exception:
-                pass
-
-        # Fallback to sparse semantic vectorizer if dense is unavailable
-        if not scored_tasks:
-            q_vec = _char_ngram_vector(query)
-            for t in tasks:
-                t_vec = _char_ngram_vector(t.objective)
-                sim = _sparse_cosine_similarity(q_vec, t_vec)
-                scored_tasks.append((sim, t))
+        for t in tasks:
+            t_vec = _char_ngram_vector(t.objective)
+            sim = _sparse_cosine_similarity(q_vec, t_vec)
+            scored_tasks.append((sim, t))
 
         scored_tasks.sort(key=lambda x: x[0], reverse=True)
-        # Filter top matches with score threshold
         results = []
         for score, t in scored_tasks[:limit]:
             if score > 0.08:
