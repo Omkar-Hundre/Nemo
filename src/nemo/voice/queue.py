@@ -5,6 +5,7 @@ import asyncio
 from dataclasses import dataclass, field
 import hashlib
 import logging
+import re
 import threading
 import time
 from typing import Any, Callable
@@ -278,6 +279,54 @@ class IdempotentTaskQueue:
                         self.on_step({"type": "finish", "answer": task.result})
                     if self.on_state_change:
                         self.on_state_change("sleeping", "Productive Mode ✓")
+
+                # 4. Contextual Active File Inspection
+                elif any(cmd_lower.startswith(pfx) for pfx in ("what file is", "which file is", "what file am i", "get active file", "check active file")):
+                    from nemo.tools.builtin import ActiveFileInspectorTool
+                    tool = ActiveFileInspectorTool()
+                    res = await tool.execute({}, context={})
+                    data = res.data or {}
+                    if data.get("files"):
+                        names = ", ".join(d.get("name", d.get("path", "")) for d in data.get("details", [])) or str(data.get("primary_file"))
+                        task.result = f"Active file selected: '{names}'."
+                    else:
+                        task.result = "No file is currently selected in Windows Explorer or Desktop."
+                    task.status = "completed"
+                    task.completed_at = time.time()
+                    if self.on_step:
+                        self.on_step({"type": "finish", "answer": task.result})
+                    if self.on_state_change:
+                        self.on_state_change("sleeping", "Active File Found ✓")
+
+                # 5. Direct Smart Messaging & Active File Dispatch
+                elif cmd_lower.startswith("send") and any(kw in cmd_lower for kw in ("whatsapp", "telegram", "slack", "discord", "file to", "this file")):
+                    from nemo.tools.builtin import MessagingDispatchTool
+                    m_plat = "whatsapp"
+                    for p in ("telegram", "slack", "discord", "email"):
+                        if p in cmd_lower:
+                            m_plat = p
+                            break
+
+                    m_rec = re.search(r"to\s+([A-Za-z0-9_\-+]+)", task.name, re.IGNORECASE)
+                    recipient = m_rec.group(1).strip() if m_rec else ""
+
+                    m_t = re.search(r"(?:at|in)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d+\s*(?:m|min|minutes|hours))", task.name, re.IGNORECASE)
+                    sched = m_t.group(1).strip() if m_t else ""
+
+                    tool = MessagingDispatchTool()
+                    res = await tool.execute({
+                        "platform": m_plat,
+                        "recipient": recipient or "Active Contact",
+                        "file_path": "active",
+                        "schedule_time": sched,
+                    }, context={})
+                    task.status = "completed" if res.success else "failed"
+                    task.result = (res.data or {}).get("summary") or res.error or "Dispatched."
+                    task.completed_at = time.time()
+                    if self.on_step:
+                        self.on_step({"type": "finish", "answer": task.result})
+                    if self.on_state_change:
+                        self.on_state_change("sleeping", "Dispatched ✓")
                 else:
                     # Execute task via AgentOrchestrator
                     orchestrator = AgentOrchestrator()
@@ -302,7 +351,8 @@ class IdempotentTaskQueue:
                     if self._current_task and self._current_task.id == task.id:
                         self._current_task = None
                 self._notify_tasks()
-                self._queue.task_done()
+                if getattr(self._queue, "_unfinished_tasks", 0) > 0:
+                    self._queue.task_done()
 
     def _notify_tasks(self) -> None:
         """Broadcast updated task list to UI."""

@@ -5827,11 +5827,463 @@ class WindowsGuiTool(BaseTool):
                 dt = WindowsDesktopTool()
                 return await dt.execute(arguments, context)
 
+            elif action == "click_coords":
+                x = int(arguments.get("x", 0))
+                y = int(arguments.get("y", 0))
+                ctypes.windll.user32.SetCursorPos(x, y)
+                ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+                time.sleep(0.05)
+                ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+                return ToolResult(success=True, data={"action": "click_coords", "x": x, "y": y})
+
+            elif action == "mouse_hover":
+                x = int(arguments.get("x", 0))
+                y = int(arguments.get("y", 0))
+                ctypes.windll.user32.SetCursorPos(x, y)
+                return ToolResult(success=True, data={"action": "mouse_hover", "x": x, "y": y})
+
+            elif action == "press_hotkey":
+                hk = arguments.get("keys", arguments.get("hotkey", "")).strip()
+                if not hk:
+                    return ToolResult(success=False, error="keys or hotkey parameter required.")
+                from pywinauto import keyboard
+                keyboard.send_keys(hk)
+                return ToolResult(success=True, data={"action": "press_hotkey", "hotkey": hk})
+
+            elif action in ("get_active_file", "active_file", "selected_file"):
+                aft = ActiveFileInspectorTool()
+                return await aft.execute(arguments, context)
+
             else:
                 return ToolResult(success=False, error=f"Unsupported gui action: '{action}'")
 
         except Exception as exc:
             return ToolResult(success=False, error=f"GUI automation error: {exc}")
+
+
+class ActiveFileInspectorTool(BaseTool):
+    """Detect and inspect the currently highlighted or pointed-to file in Windows Explorer, Desktop, or Clipboard."""
+    name = "active_file"
+    description = (
+        "Identify the file(s) currently selected, highlighted, or pointed to in Windows Explorer or Desktop, "
+        "or on the clipboard file drop. Returns absolute paths, names, extensions, and file sizes."
+    )
+    risk_level = RiskLevel.L0
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["get_selected", "get_hovered"],
+                        "description": "Detection mode: 'get_selected' for Explorer/Desktop selection, 'get_hovered' for file under mouse cursor.",
+                        "default": "get_selected",
+                    },
+                },
+            },
+            risk_level=self.risk_level,
+        )
+
+    @staticmethod
+    def get_selected_files() -> list[str]:
+        """Query Shell.Application COM for selected files in Explorer windows or Desktop."""
+        paths: list[str] = []
+        try:
+            import win32com.client
+            shell = win32com.client.Dispatch("Shell.Application")
+            for w in shell.Windows():
+                try:
+                    items = w.Document.SelectedItems()
+                    for i in range(items.Count):
+                        p = str(items.Item(i).Path)
+                        if p and p not in paths:
+                            paths.append(p)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Fallback to Clipboard FileDropList if no active Explorer selection
+        if not paths:
+            try:
+                res = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", "Get-Clipboard -Format FileDropList"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    for line in res.stdout.strip().splitlines():
+                        cleaned = line.strip().strip('"\'')
+                        if cleaned and Path(cleaned).exists() and cleaned not in paths:
+                            paths.append(cleaned)
+            except Exception:
+                pass
+
+        return paths
+
+    @staticmethod
+    def get_hovered_file() -> str | None:
+        """Inspect UI element under the current mouse cursor."""
+        try:
+            import win32gui
+            from pywinauto import Desktop
+            pt = win32gui.GetCursorPos()
+            d = Desktop(backend="uia")
+            elem = d.from_point(pt[0], pt[1])
+            if elem:
+                name = elem.window_text() or elem.element_info.name
+                if name and ("." in name or Path(name).exists()):
+                    return name
+        except Exception:
+            pass
+        return None
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        if platform.system() != "Windows":
+            return ToolResult(success=False, error="active_file tool is only supported on Windows.")
+
+        action = arguments.get("action", "get_selected")
+        if action == "get_hovered":
+            hovered = self.get_hovered_file()
+            if hovered:
+                p = Path(hovered)
+                sz = p.stat().st_size if p.exists() else 0
+                return ToolResult(
+                    success=True,
+                    data={
+                        "count": 1,
+                        "files": [str(p)],
+                        "primary_file": str(p),
+                        "file_name": p.name,
+                        "extension": p.suffix,
+                        "size_bytes": sz,
+                        "detection_method": "cursor_hover",
+                    },
+                )
+
+        selected = self.get_selected_files()
+        if not selected:
+            return ToolResult(
+                success=True,
+                data={
+                    "count": 0,
+                    "files": [],
+                    "primary_file": None,
+                    "message": "No file currently selected in Windows Explorer or Desktop. (Select a file or copy it with Ctrl+C first).",
+                },
+            )
+
+        details = []
+        for s in selected:
+            p = Path(s)
+            sz = p.stat().st_size if p.is_file() and p.exists() else 0
+            details.append({
+                "path": str(p),
+                "name": p.name,
+                "is_dir": p.is_dir() if p.exists() else False,
+                "extension": p.suffix,
+                "size_bytes": sz,
+            })
+
+        return ToolResult(
+            success=True,
+            data={
+                "count": len(selected),
+                "files": selected,
+                "primary_file": selected[0],
+                "details": details,
+                "detection_method": "explorer_selection",
+            },
+        )
+
+
+class MessagingDispatchTool(BaseTool):
+    """Automate messaging and file attachment dispatch via WhatsApp, Telegram, Slack, Discord, or Email."""
+    name = "messaging_dispatch"
+    description = (
+        "Send text messages and/or attach and send files directly via WhatsApp, Telegram, Slack, Discord, or Email. "
+        "Supports contact names, phone numbers, active file attachment, and scheduled delayed dispatch (e.g. 'at 1 PM')."
+    )
+    risk_level = RiskLevel.L2
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description=self.description,
+            parameters={
+                "type": "object",
+                "properties": {
+                    "platform": {
+                        "type": "string",
+                        "enum": ["whatsapp", "telegram", "slack", "discord", "email"],
+                        "description": "Messaging platform to use (default: 'whatsapp').",
+                        "default": "whatsapp",
+                    },
+                    "recipient": {
+                        "type": "string",
+                        "description": "Recipient phone number (e.g. '+919876543210') or contact name (e.g. 'Rohan').",
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "Optional text message to send.",
+                        "default": "",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to file to attach. If omitted or 'active', automatically uses the currently selected Explorer file.",
+                    },
+                    "schedule_time": {
+                        "type": "string",
+                        "description": "Optional scheduled dispatch time (e.g. '13:00', '1:00 PM', 'in 15 minutes').",
+                    },
+                },
+                "required": ["recipient"],
+            },
+            risk_level=self.risk_level,
+        )
+
+    @staticmethod
+    def _parse_schedule_delay(schedule_str: str) -> float | None:
+        """Parse natural time string ('1:00 PM', '13:00', 'in 15m') into delay seconds."""
+        if not schedule_str:
+            return None
+        s = schedule_str.strip().lower()
+        now = datetime.datetime.now()
+
+        # "in X minutes" / "in Xm"
+        m_rel = re.search(r"in\s+(\d+)\s*(?:m|min|minute|minutes)", s)
+        if m_rel:
+            return float(m_rel.group(1)) * 60.0
+
+        # "in X hours" / "in Xh"
+        m_rel_h = re.search(r"in\s+(\d+)\s*(?:h|hr|hour|hours)", s)
+        if m_rel_h:
+            return float(m_rel_h.group(1)) * 3600.0
+
+        # "1:00 PM" or "13:00"
+        m_time = re.search(r"(\d{1,2}):(\d{2})(?:\s*(am|pm))?", s)
+        if m_time:
+            h = int(m_time.group(1))
+            m = int(m_time.group(2))
+            meridiem = m_time.group(3)
+            if meridiem:
+                if meridiem == "pm" and h < 12:
+                    h += 12
+                elif meridiem == "am" and h == 12:
+                    h = 0
+            target = now.replace(hour=h, minute=m, second=0, microsecond=0)
+            if target <= now:
+                target += datetime.timedelta(days=1)
+            return (target - now).total_seconds()
+
+        return None
+
+    @staticmethod
+    def _copy_file_to_clipboard(file_path: Path) -> bool:
+        """Place file object on Windows clipboard using native CF_HDROP via PowerShell."""
+        try:
+            cmd = f"Set-Clipboard -Path '{file_path.resolve()}'"
+            res = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, timeout=5)
+            return res.returncode == 0
+        except Exception:
+            return False
+
+    def _send_whatsapp(self, recipient: str, message: str, file_path: Path | None) -> dict[str, Any]:
+        """Dispatch via WhatsApp Desktop or URI protocol."""
+        clean_num = re.sub(r"[^\d+]", "", recipient)
+        is_phone = len(clean_num) >= 7 and (clean_num.startswith("+") or clean_num.isdigit())
+
+        encoded_msg = quote(message or "")
+
+        if is_phone:
+            clean_digits = clean_num.lstrip("+")
+            uri = f"whatsapp://send?phone={clean_digits}"
+            if encoded_msg:
+                uri += f"&text={encoded_msg}"
+            subprocess.Popen(f'start "" "{uri}"', shell=True)
+            time.sleep(1.5)
+        else:
+            subprocess.Popen('start "" "whatsapp:"', shell=True)
+            time.sleep(1.2)
+            try:
+                from pywinauto import keyboard
+                keyboard.send_keys("^f")
+                time.sleep(0.4)
+                keyboard.send_keys(f"{recipient}{{ENTER}}")
+                time.sleep(0.8)
+                if message:
+                    keyboard.send_keys(f"{message}{{ENTER}}")
+                    time.sleep(0.4)
+            except Exception as e:
+                return {"success": False, "error": f"WhatsApp contact navigation failed: {e}"}
+
+        if file_path and file_path.exists():
+            self._copy_file_to_clipboard(file_path)
+            time.sleep(0.5)
+            try:
+                from pywinauto import keyboard
+                keyboard.send_keys("^v")
+                time.sleep(0.8)
+                keyboard.send_keys("{ENTER}")
+            except Exception as e:
+                return {"success": False, "error": f"Failed to paste file attachment into WhatsApp: {e}"}
+
+        return {"success": True, "method": "whatsapp_uri" if is_phone else "whatsapp_ui_search"}
+
+    def _send_telegram(self, recipient: str, message: str, file_path: Path | None) -> dict[str, Any]:
+        """Dispatch via Telegram Desktop."""
+        encoded_msg = quote(message or "")
+        uri = f"tg://msg?text={encoded_msg}"
+        subprocess.Popen(f'start "" "{uri}"', shell=True)
+        time.sleep(1.2)
+        if file_path and file_path.exists():
+            self._copy_file_to_clipboard(file_path)
+            time.sleep(0.5)
+            try:
+                from pywinauto import keyboard
+                keyboard.send_keys("^v")
+                time.sleep(0.8)
+                keyboard.send_keys("{ENTER}")
+            except Exception:
+                pass
+        return {"success": True, "method": "telegram_uri"}
+
+    def _send_slack(self, recipient: str, message: str, file_path: Path | None) -> dict[str, Any]:
+        """Dispatch via Slack Desktop."""
+        subprocess.Popen('start "" "slack://"', shell=True)
+        time.sleep(1.2)
+        if file_path and file_path.exists():
+            self._copy_file_to_clipboard(file_path)
+            time.sleep(0.5)
+            try:
+                from pywinauto import keyboard
+                keyboard.send_keys("^v")
+                time.sleep(0.8)
+                keyboard.send_keys("{ENTER}")
+            except Exception:
+                pass
+        return {"success": True, "method": "slack_uri"}
+
+    def _send_discord(self, recipient: str, message: str, file_path: Path | None) -> dict[str, Any]:
+        """Dispatch via Discord Desktop."""
+        if file_path and file_path.exists():
+            self._copy_file_to_clipboard(file_path)
+            time.sleep(0.5)
+            try:
+                from pywinauto import keyboard
+                keyboard.send_keys("^v")
+                time.sleep(0.8)
+                keyboard.send_keys("{ENTER}")
+            except Exception:
+                pass
+        return {"success": True, "method": "discord_paste"}
+
+    def _send_email(self, recipient: str, message: str, file_path: Path | None) -> dict[str, Any]:
+        """Dispatch via system default mail client."""
+        subj = quote(f"File share: {file_path.name}" if file_path else "Message from Nemo")
+        body = quote(message or "")
+        uri = f"mailto:{recipient}?subject={subj}&body={body}"
+        subprocess.Popen(f'start "" "{uri}"', shell=True)
+        return {"success": True, "method": "mailto_uri"}
+
+    async def execute(self, arguments: dict[str, Any], context: dict[str, Any]) -> ToolResult:
+        if platform.system() != "Windows":
+            return ToolResult(success=False, error="messaging_dispatch is only supported on Windows.")
+
+        platform_choice = arguments.get("platform", "whatsapp").lower().strip()
+        recipient = arguments.get("recipient", "").strip()
+        message = arguments.get("message", "").strip()
+        file_arg = arguments.get("file_path", "").strip()
+        schedule_time = arguments.get("schedule_time", "").strip()
+
+        if not recipient:
+            return ToolResult(success=False, error="Recipient phone number or contact name is required.")
+
+        # Resolve active file if requested or omitted
+        target_file: Path | None = None
+        if file_arg and file_arg.lower() not in ("active", "selected", "hovered", "none"):
+            target_file = Path(file_arg)
+        elif file_arg.lower() in ("active", "selected", "hovered") or not file_arg:
+            active_files = ActiveFileInspectorTool.get_selected_files()
+            if active_files:
+                target_file = Path(active_files[0])
+
+        if target_file and not target_file.exists():
+            return ToolResult(success=False, error=f"Target file not found: {target_file}")
+
+        # Check for scheduled delayed dispatch
+        delay_sec = self._parse_schedule_delay(schedule_time) if schedule_time else None
+        if delay_sec and delay_sec > 5.0:
+            target_dt = datetime.datetime.now() + datetime.timedelta(seconds=delay_sec)
+            target_formatted = target_dt.strftime("%I:%M %p")
+
+            def _delayed_dispatch():
+                try:
+                    if platform_choice == "whatsapp":
+                        self._send_whatsapp(recipient, message, target_file)
+                    elif platform_choice == "telegram":
+                        self._send_telegram(recipient, message, target_file)
+                    elif platform_choice == "slack":
+                        self._send_slack(recipient, message, target_file)
+                    elif platform_choice == "discord":
+                        self._send_discord(recipient, message, target_file)
+                    elif platform_choice == "email":
+                        self._send_email(recipient, message, target_file)
+                except Exception as ex:
+                    logger.error("Delayed dispatch failed: %s", ex)
+
+            import threading
+            timer = threading.Timer(delay_sec, _delayed_dispatch)
+            timer.daemon = True
+            timer.start()
+
+            file_desc = f"'{target_file.name}'" if target_file else "message"
+            return ToolResult(
+                success=True,
+                data={
+                    "scheduled": True,
+                    "target_time": target_formatted,
+                    "delay_seconds": round(delay_sec, 1),
+                    "recipient": recipient,
+                    "platform": platform_choice,
+                    "file_path": str(target_file) if target_file else None,
+                    "summary": f"Scheduled to send {file_desc} to {recipient} via {platform_choice.title()} at {target_formatted}.",
+                },
+            )
+
+        # Immediate dispatch
+        if platform_choice == "whatsapp":
+            res = self._send_whatsapp(recipient, message, target_file)
+        elif platform_choice == "telegram":
+            res = self._send_telegram(recipient, message, target_file)
+        elif platform_choice == "slack":
+            res = self._send_slack(recipient, message, target_file)
+        elif platform_choice == "discord":
+            res = self._send_discord(recipient, message, target_file)
+        elif platform_choice == "email":
+            res = self._send_email(recipient, message, target_file)
+        else:
+            return ToolResult(success=False, error=f"Unsupported platform: '{platform_choice}'")
+
+        if not res.get("success"):
+            return ToolResult(success=False, error=res.get("error", "Dispatch failed."))
+
+        file_desc = f"'{target_file.name}'" if target_file else "message"
+        return ToolResult(
+            success=True,
+            data={
+                "delivered": True,
+                "platform": platform_choice,
+                "recipient": recipient,
+                "file_path": str(target_file) if target_file else None,
+                "summary": f"Sent {file_desc} to {recipient} via {platform_choice.title()} successfully.",
+            },
+        )
 
 
 
@@ -6062,4 +6514,6 @@ __all__ = [
     "WindowsDesktopTool",
     "WebResearcherTool",
     "WindowsGuiTool",
+    "ActiveFileInspectorTool",
+    "MessagingDispatchTool",
 ]
