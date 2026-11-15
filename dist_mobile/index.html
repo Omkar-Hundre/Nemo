@@ -1,35 +1,77 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Nemo Remote</title>
-  <meta name="description" content="Nemo Mobile Remote Controller">
-  <meta name="theme-color" content="#09090b">
+  <meta name="description" content="Nemo Mobile Remote Controller & Realtime Screen Stream">
+  <meta name="theme-color" content="#ffffff">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Nemo">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%2309090b'/%3E%3Ccircle cx='50' cy='50' r='18' fill='%2338bdf8'/%3E%3Ccircle cx='50' cy='50' r='34' fill='none' stroke='%2338bdf8' stroke-width='4' opacity='0.4'/%3E%3C/svg%3E">
-  <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%2309090b'/%3E%3Ccircle cx='50' cy='50' r='18' fill='%2338bdf8'/%3E%3Ccircle cx='50' cy='50' r='34' fill='none' stroke='%2338bdf8' stroke-width='4' opacity='0.4'/%3E%3C/svg%3E">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%230284c7'/%3E%3Ccircle cx='50' cy='50' r='20' fill='%23ffffff'/%3E%3C/svg%3E">
+  <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%230284c7'/%3E%3Ccircle cx='50' cy='50' r='20' fill='%23ffffff'/%3E%3C/svg%3E">
   <link rel="manifest" href="manifest.json">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
+    /* Light Theme (Default) */
     :root {
-      --bg: #09090b;
-      --card-bg: #111114;
-      --card-hover: #15151a;
-      --border: #1f1f23;
-      --border-focus: #3f3f46;
-      --text: #f4f4f5;
-      --text-muted: #71717a;
-      --text-dim: #52525b;
-      --accent: #38bdf8;
+      --bg-page: #f1f5f9;
+      --bg-app: #ffffff;
+      --bg-header: rgba(255, 255, 255, 0.94);
+      --bg-card: #ffffff;
+      --bg-bubble-user: #0284c7;
+      --text-bubble-user: #ffffff;
+      --bg-bubble-ai: #ffffff;
+      --text-bubble-ai: #0f172a;
+      --border: #e2e8f0;
+      --border-focus: #0284c7;
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --text-dim: #94a3b8;
+      --accent: #0284c7;
+      --accent-soft: #e0f2fe;
+      --accent-hover: #0369a1;
       --success: #10b981;
       --danger: #ef4444;
       --warning: #f59e0b;
-      --radius: 12px;
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+      --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.07);
+      --bottom-bar-bg: rgba(255, 255, 255, 0.94);
+      --input-bg: #f8fafc;
+      --chip-bg: #ffffff;
+      --chip-border: #e2e8f0;
+    }
+
+    /* Dark Theme */
+    [data-theme="dark"] {
+      --bg-page: #09090b;
+      --bg-app: #111114;
+      --bg-header: rgba(17, 17, 20, 0.92);
+      --bg-card: #18181b;
+      --bg-bubble-user: #0284c7;
+      --text-bubble-user: #ffffff;
+      --bg-bubble-ai: #18181b;
+      --text-bubble-ai: #f4f4f5;
+      --border: #27272a;
+      --border-focus: #38bdf8;
+      --text-main: #f4f4f5;
+      --text-muted: #a1a1aa;
+      --text-dim: #71717a;
+      --accent: #38bdf8;
+      --accent-soft: rgba(56, 189, 248, 0.12);
+      --accent-hover: #0284c7;
+      --success: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+      --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+      --bottom-bar-bg: rgba(17, 17, 20, 0.92);
+      --input-bg: #18181b;
+      --chip-bg: #18181b;
+      --chip-border: #27272a;
     }
 
     * {
@@ -39,226 +81,648 @@
       -webkit-tap-highlight-color: transparent;
     }
 
-    body {
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      min-height: -webkit-fill-available;
-      display: flex;
-      flex-direction: column;
-      overflow-x: hidden;
+    html, body {
+      height: 100%;
+      background-color: var(--bg-page);
+      color: var(--text-main);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      overflow: hidden;
       -webkit-font-smoothing: antialiased;
     }
 
-    /* Minimal status line instead of heavy topbar */
-    .status-bar {
-      padding: calc(env(safe-area-inset-top, 16px) + 12px) 20px 8px 20px;
+    /* App Shell Container */
+    #appContainer {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      max-width: 600px;
+      margin: 0 auto;
+      background: var(--bg-app);
+      position: relative;
+      border-left: 1px solid var(--border);
+      border-right: 1px solid var(--border);
+    }
+
+    @media (max-width: 640px) {
+      #appContainer {
+        border-left: none;
+        border-right: none;
+      }
+    }
+
+    /* Standard Compact Topbar */
+    header {
+      flex-shrink: 0;
+      height: 52px;
+      padding: 0 12px;
+      padding-top: env(safe-area-inset-top, 0px);
+      background: var(--bg-header);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
       display: flex;
       align-items: center;
       justify-content: space-between;
-      max-width: 680px;
-      margin: 0 auto;
-      width: 100%;
+      z-index: 50;
     }
 
-    .brand-mark {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.85rem;
-      font-weight: 500;
-      letter-spacing: -0.2px;
-      color: var(--text-muted);
+    .brand-section {
       display: flex;
       align-items: center;
       gap: 8px;
     }
 
-    .status-indicator {
+    .avatar-badge {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
       display: flex;
       align-items: center;
-      gap: 6px;
-      font-size: 0.72rem;
-      font-family: 'JetBrains Mono', monospace;
-      color: var(--text-dim);
+      justify-content: center;
+      font-weight: 700;
+      font-size: 0.85rem;
+      letter-spacing: -0.5px;
+      position: relative;
     }
 
-    .status-dot {
+    .status-badge-dot {
+      position: absolute;
+      bottom: 0px;
+      right: 0px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--success);
+      border: 1.5px solid #fff;
+    }
+
+    .status-badge-dot.pulse {
+      animation: statusPulse 1.6s infinite;
+    }
+
+    @keyframes statusPulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.3); opacity: 0.6; }
+    }
+
+    .brand-title {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--text-main);
+      line-height: 1.2;
+    }
+
+    .brand-sub {
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Center Mode Switcher Tabs */
+    .mode-switcher {
+      display: flex;
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 2px;
+      gap: 2px;
+    }
+
+    .mode-tab {
+      padding: 5px 12px;
+      border-radius: 16px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      transition: all 0.15s ease;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .mode-tab.active {
+      background: var(--bg-card);
+      color: var(--text-main);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .live-dot-mini {
       width: 6px;
       height: 6px;
       border-radius: 50%;
-      background: var(--success);
-      transition: background 0.2s ease;
+      background: var(--danger);
+      animation: statusPulse 1.2s infinite;
     }
 
-    .status-dot.working {
-      background: var(--accent);
-      animation: pulse 1.5s infinite;
+    /* Right Header Actions */
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
     }
 
-    @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.4; transform: scale(0.85); }
+    .btn-header {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
     }
 
-    /* Main conversation container */
-    main {
+    .btn-header:hover {
+      background: var(--input-bg);
+      color: var(--text-main);
+    }
+
+    /* Content Area: Chat Mode vs Stream Mode */
+    .view-panel {
       flex: 1;
-      padding: 12px 16px 140px 16px;
-      max-width: 680px;
-      margin: 0 auto;
-      width: 100%;
-      display: flex;
+      display: none;
       flex-direction: column;
-      gap: 16px;
+      overflow: hidden;
+      position: relative;
     }
 
-    .empty-state {
-      text-align: center;
-      margin: auto 0;
-      padding: 60px 20px;
-      color: var(--text-dim);
-      font-size: 0.9rem;
-      font-weight: 400;
-      letter-spacing: -0.2px;
-    }
-
-    .task-feed {
+    .view-panel.active {
       display: flex;
-      flex-direction: column;
-      gap: 14px;
     }
 
-    .card {
-      background: var(--card-bg);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 14px 16px;
+    /* Chat View */
+    #chatPanel {
+      height: calc(100% - 52px);
+    }
+
+    .messages-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 12px 130px 12px;
       display: flex;
       flex-direction: column;
       gap: 10px;
-      transition: border-color 0.15s ease;
+      scroll-behavior: smooth;
     }
 
-    .card.running {
-      border-color: rgba(56, 189, 248, 0.4);
+    .empty-chat {
+      text-align: center;
+      margin: auto 0;
+      padding: 40px 16px;
+      color: var(--text-muted);
+      font-size: 0.85rem;
     }
 
-    .card-top {
+    .empty-chat-icon {
+      font-size: 2rem;
+      margin-bottom: 8px;
+    }
+
+    /* Message Bubbles (Standard Chat App Layout) */
+    .msg-row {
       display: flex;
-      justify-content: space-between;
-      align-items: baseline;
-      gap: 12px;
+      flex-direction: column;
+      width: 100%;
+      animation: fadeInMsg 0.2s ease-out;
     }
 
-    .prompt-text {
-      font-size: 0.92rem;
-      font-weight: 500;
-      color: var(--text);
+    @keyframes fadeInMsg {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* User Message Bubble */
+    .msg-row.user {
+      align-items: flex-end;
+    }
+
+    .msg-row.user .bubble {
+      background: var(--bg-bubble-user);
+      color: var(--text-bubble-user);
+      border-radius: 18px 18px 4px 18px;
+      padding: 9px 14px;
+      max-width: 84%;
+      font-size: 0.9rem;
       line-height: 1.4;
-      letter-spacing: -0.2px;
+      box-shadow: var(--shadow-sm);
+      word-break: break-word;
     }
 
-    .time-badge {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.7rem;
+    .msg-row.user .msg-meta {
+      font-size: 0.68rem;
       color: var(--text-dim);
-      white-space: nowrap;
+      margin-top: 3px;
+      margin-right: 4px;
+      font-family: 'JetBrains Mono', monospace;
     }
 
-    .result-box {
-      font-size: 0.86rem;
-      line-height: 1.55;
-      color: #d4d4d8;
-      background: #000000;
-      border: 1px solid #18181b;
-      border-radius: 8px;
-      padding: 12px 14px;
-      white-space: pre-wrap;
+    /* Assistant (Nemo) Message Bubble */
+    .msg-row.assistant {
+      align-items: flex-start;
+    }
+
+    .msg-row.assistant .bubble {
+      background: var(--bg-bubble-ai);
+      color: var(--text-bubble-ai);
+      border: 1px solid var(--border);
+      border-radius: 18px 18px 18px 4px;
+      padding: 10px 13px;
+      max-width: 90%;
+      font-size: 0.88rem;
+      line-height: 1.5;
+      box-shadow: var(--shadow-sm);
       word-break: break-word;
       position: relative;
     }
 
-    .result-box.running {
+    .msg-row.assistant .msg-meta {
+      font-size: 0.68rem;
+      color: var(--text-dim);
+      margin-top: 3px;
+      margin-left: 4px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .bubble.pending {
+      color: var(--warning);
+      background: var(--input-bg);
+      border-style: dashed;
+    }
+
+    .bubble.running {
       color: var(--accent);
-      background: rgba(56, 189, 248, 0.04);
-      border-color: rgba(56, 189, 248, 0.15);
-      font-size: 0.82rem;
+      background: var(--accent-soft);
+      border-color: var(--accent);
       display: flex;
       align-items: center;
       gap: 8px;
     }
 
-    .result-box.pending {
-      color: var(--warning);
-      background: rgba(245, 158, 11, 0.04);
-      border-color: rgba(245, 158, 11, 0.15);
-      font-size: 0.82rem;
-    }
-
-    .result-box.failed {
+    .bubble.failed {
       color: var(--danger);
-      background: rgba(239, 68, 68, 0.04);
-      border-color: rgba(239, 68, 68, 0.15);
-      font-size: 0.82rem;
+      background: #fef2f2;
+      border-color: #fecaca;
     }
 
-    .copy-btn {
-      position: absolute;
-      top: 8px;
-      right: 8px;
-      background: #18181b;
-      border: 1px solid #27272a;
-      color: var(--text-dim);
-      border-radius: 6px;
-      padding: 4px 8px;
-      font-size: 0.68rem;
-      font-family: 'JetBrains Mono', monospace;
-      cursor: pointer;
-      opacity: 0.6;
-      transition: all 0.15s ease;
-      z-index: 5;
-    }
-
-    .copy-btn:hover, .copy-btn:active {
-      opacity: 1;
-      color: var(--text);
-      background: #27272a;
-    }
-
-    /* Screen snapshot preview card */
-    .snapshot-wrap {
-      position: relative;
-      border-radius: 8px;
-      overflow: hidden;
-      cursor: pointer;
-      margin-bottom: 8px;
+    .copy-inline-btn {
+      float: right;
+      margin-left: 8px;
+      margin-bottom: 4px;
+      background: var(--input-bg);
       border: 1px solid var(--border);
-      background: #000000;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 0.65rem;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-muted);
+      cursor: pointer;
     }
 
-    .snapshot-preview {
+    .copy-inline-btn:hover {
+      color: var(--text-main);
+      background: var(--border);
+    }
+
+    /* Snapshot preview inside chat bubble */
+    .chat-snapshot-wrap {
+      margin: 6px 0;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      background: #000;
+      cursor: pointer;
+      position: relative;
+    }
+
+    .chat-snapshot-img {
       width: 100%;
       height: auto;
-      max-height: 280px;
+      max-height: 240px;
       object-fit: cover;
       display: block;
-      transition: transform 0.2s ease;
     }
 
-    .snapshot-wrap:hover .snapshot-preview {
-      transform: scale(1.01);
-    }
-
-    .snapshot-overlay {
+    .chat-snapshot-tag {
       position: absolute;
       bottom: 0;
       left: 0;
       right: 0;
-      padding: 6px 10px;
-      font-size: 0.7rem;
+      padding: 4px 8px;
+      font-size: 0.68rem;
       font-family: 'JetBrains Mono', monospace;
-      color: #e4e4e7;
-      background: linear-gradient(180deg, transparent 0%, rgba(0,0,0,0.85) 100%);
+      color: #fff;
+      background: rgba(0, 0, 0, 0.65);
+      backdrop-filter: blur(4px);
+    }
+
+    /* Pinned Bottom Area for Chat */
+    .bottom-pinned-bar {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--bottom-bar-bg);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border-top: 1px solid var(--border);
+      padding: 6px 10px calc(env(safe-area-inset-bottom, 8px) + 6px) 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      z-index: 40;
+    }
+
+    /* Compact horizontal chips */
+    .chips-row {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+      scrollbar-width: none;
+    }
+
+    .chips-row::-webkit-scrollbar {
+      display: none;
+    }
+
+    .chip-item {
+      flex-shrink: 0;
+      padding: 4px 10px;
+      border-radius: 14px;
+      background: var(--chip-bg);
+      border: 1px solid var(--chip-border);
+      color: var(--text-muted);
+      font-size: 0.74rem;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.15s ease;
+    }
+
+    .chip-item:hover, .chip-item:active {
+      color: var(--text-main);
+      background: var(--accent-soft);
+      border-color: var(--accent);
+    }
+
+    /* Input pill bar */
+    .input-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      padding: 3px 6px 3px 10px;
+      transition: border-color 0.15s;
+    }
+
+    .input-bar:focus-within {
+      border-color: var(--border-focus);
+    }
+
+    .chat-input {
+      flex: 1;
+      border: none;
+      background: transparent;
+      outline: none;
+      color: var(--text-main);
+      font-size: 0.9rem;
+      padding: 6px 2px;
+      font-family: inherit;
+    }
+
+    .chat-input::placeholder {
+      color: var(--text-dim);
+    }
+
+    .btn-circle {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+    }
+
+    .btn-mic {
+      background: transparent;
+      color: var(--text-muted);
+    }
+
+    .btn-mic:hover {
+      color: var(--text-main);
+    }
+
+    .btn-mic.recording {
+      color: #fff;
+      background: var(--danger);
+      animation: statusPulse 1s infinite;
+    }
+
+    .btn-send {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .btn-send:hover {
+      background: var(--accent-hover);
+    }
+
+    /* ====================================================
+       PC LIVE SCREEN STREAM PANEL (WebRTC & WebSocket)
+       ==================================================== */
+    #streamPanel {
+      height: calc(100% - 52px);
+      background: #000000;
+      color: #fff;
+      display: none;
+      flex-direction: column;
+      position: relative;
+    }
+
+    #streamPanel.active {
+      display: flex;
+    }
+
+    /* Stream Top HUD bar */
+    .stream-hud {
+      padding: 8px 12px;
+      background: rgba(0, 0, 0, 0.85);
+      border-bottom: 1px solid #1f2937;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.74rem;
+      z-index: 20;
+    }
+
+    .hud-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .live-tag {
+      background: #ef4444;
+      color: #fff;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.68rem;
+    }
+
+    .live-indicator {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #fff;
+      animation: statusPulse 1.2s infinite;
+    }
+
+    .hud-stats {
+      color: #9ca3af;
+      font-size: 0.7rem;
+    }
+
+    .hud-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .stream-source-select {
+      background: #1f2937;
+      color: #e5e7eb;
+      border: 1px solid #374151;
+      border-radius: 6px;
+      font-size: 0.72rem;
+      font-family: inherit;
+      padding: 3px 6px;
+      outline: none;
+    }
+
+    /* Stream Viewport Container */
+    .stream-viewport {
+      flex: 1;
+      width: 100%;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #050507;
+      overflow: hidden;
+    }
+
+    #remoteVideo {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: none;
+    }
+
+    #streamCanvas {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: none;
+    }
+
+    /* Offline / Waiting Overlay */
+    .stream-placeholder {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      padding: 20px;
+      text-align: center;
+      color: #9ca3af;
+    }
+
+    .stream-placeholder h4 {
+      color: #f3f4f6;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+
+    .stream-placeholder p {
+      font-size: 0.8rem;
+      max-width: 300px;
+      line-height: 1.4;
+      color: #6b7280;
+    }
+
+    .btn-stream-action {
+      background: #0284c7;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 16px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* Stream Floating Quick Command Bar */
+    .stream-command-bar {
+      background: rgba(15, 23, 42, 0.95);
+      backdrop-filter: blur(8px);
+      border-top: 1px solid #1e293b;
+      padding: 8px 10px calc(env(safe-area-inset-bottom, 8px) + 6px) 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      z-index: 30;
+    }
+
+    .stream-controls-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .stream-tool-btn {
+      background: #1e293b;
+      border: 1px solid #334155;
+      color: #e2e8f0;
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 0.72rem;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .stream-tool-btn:hover {
+      background: #334155;
     }
 
     /* Lightbox Modal */
@@ -274,7 +738,6 @@
       align-items: center;
       justify-content: center;
       padding: 16px;
-      cursor: zoom-out;
     }
 
     .lightbox-modal.active {
@@ -286,271 +749,572 @@
       max-height: 90vh;
       object-fit: contain;
       border-radius: 8px;
-      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.9);
     }
 
     .lightbox-close {
       position: absolute;
       top: 20px;
       right: 20px;
-      background: #18181b;
-      border: 1px solid #27272a;
+      background: #1f2937;
+      border: 1px solid #374151;
       color: #fff;
       border-radius: 50%;
       width: 36px;
       height: 36px;
+      cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      cursor: pointer;
       font-size: 1rem;
     }
 
-    /* Fixed bottom container */
-    .bottom-area {
+    /* Settings Modal */
+    .settings-modal {
       position: fixed;
-      bottom: 0;
+      top: 0;
       left: 0;
       right: 0;
-      padding: 10px 16px calc(env(safe-area-inset-bottom, 16px) + 8px) 16px;
-      background: rgba(9, 9, 11, 0.85);
-      backdrop-filter: blur(20px);
-      -webkit-backdrop-filter: blur(20px);
-      border-top: 1px solid var(--border);
-      z-index: 100;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .chips-bar {
-      max-width: 680px;
-      width: 100%;
-      display: flex;
-      gap: 6px;
-      overflow-x: auto;
-      scrollbar-width: none;
-      -webkit-overflow-scrolling: touch;
-      padding: 2px 0;
-    }
-
-    .chips-bar::-webkit-scrollbar {
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(4px);
+      z-index: 9000;
       display: none;
-    }
-
-    .chip {
-      background: #141417;
-      border: 1px solid var(--border);
-      color: var(--text-muted);
-      padding: 5px 11px;
-      border-radius: 20px;
-      font-size: 0.75rem;
-      font-weight: 500;
-      cursor: pointer;
-      white-space: nowrap;
-      transition: all 0.15s ease;
-    }
-
-    .chip:hover, .chip:active {
-      background: #1e1e24;
-      border-color: var(--border-focus);
-      color: var(--text);
-    }
-
-    .input-pill {
-      max-width: 680px;
-      width: 100%;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      background: #141417;
-      border: 1px solid var(--border);
-      border-radius: 28px;
-      padding: 4px 6px 4px 12px;
-      transition: border-color 0.15s ease;
-    }
-
-    .input-pill:focus-within {
-      border-color: var(--border-focus);
-    }
-
-    .main-input {
-      flex: 1;
-      background: transparent;
-      border: none;
-      outline: none;
-      color: var(--text);
-      font-size: 0.92rem;
-      font-family: inherit;
-      padding: 8px 4px;
-    }
-
-    .main-input::placeholder {
-      color: var(--text-dim);
-    }
-
-    .btn-icon {
-      background: transparent;
-      border: none;
-      width: 34px;
-      height: 34px;
-      border-radius: 50%;
-      display: flex;
       align-items: center;
       justify-content: center;
-      cursor: pointer;
-      color: var(--text-dim);
-      transition: all 0.15s ease;
+      padding: 20px;
     }
 
-    .btn-icon:hover, .btn-icon:active {
-      color: var(--text);
-      background: rgba(255, 255, 255, 0.06);
+    .settings-modal.active {
+      display: flex;
     }
 
-    .btn-mic.recording {
-      color: var(--danger);
-      background: rgba(239, 68, 68, 0.12);
-      animation: pulse 1s infinite;
+    .settings-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      max-width: 360px;
+      width: 100%;
+      box-shadow: var(--shadow-md);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
     }
 
-    .btn-send {
-      background: var(--text);
-      color: var(--bg);
+    .settings-title {
+      font-size: 1rem;
+      font-weight: 700;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
 
-    .btn-send:hover, .btn-send:active {
-      background: #ffffff;
-      color: #000000;
+    .settings-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .settings-label {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    .settings-input {
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--input-bg);
+      color: var(--text-main);
+      font-size: 0.85rem;
+      outline: none;
+      font-family: 'JetBrains Mono', monospace;
     }
   </style>
 </head>
 <body>
 
-  <!-- Minimal status header -->
-  <div class="status-bar">
-    <div class="brand-mark">
-      <span>nemo</span>
+  <div id="appContainer">
+
+    <!-- Compact Standard Header -->
+    <header>
+      <div class="brand-section">
+        <div class="avatar-badge">
+          N
+          <span class="status-badge-dot pulse" id="headerStatusDot"></span>
+        </div>
+        <div>
+          <div class="brand-title">Nemo</div>
+          <div class="brand-sub" id="headerSubText">online</div>
+        </div>
+      </div>
+
+      <!-- Mode Switcher Tabs -->
+      <div class="mode-switcher">
+        <button class="mode-tab active" id="tabChat" onclick="switchView('chat')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+          </svg>
+          Chat
+        </button>
+        <button class="mode-tab" id="tabStream" onclick="switchView('stream')">
+          <span class="live-dot-mini"></span>
+          Live PC
+        </button>
+      </div>
+
+      <!-- Header Action Controls -->
+      <div class="header-actions">
+        <button class="btn-header" onclick="toggleTheme()" title="Toggle Theme" id="themeToggleBtn">
+          ☀️
+        </button>
+        <button class="btn-header" onclick="openSettings()" title="Settings">
+          ⚙️
+        </button>
+      </div>
+    </header>
+
+    <!-- ==================== VIEW 1: CHAT PANEL ==================== -->
+    <div id="chatPanel" class="view-panel active">
+      <div class="messages-scroll" id="chatFeed">
+        <div class="empty-chat" id="emptyChatNotice">
+          <div class="empty-chat-icon">💬</div>
+          <div><b>Nemo Mobile Assistant</b></div>
+          <div style="font-size: 0.78rem; margin-top: 4px;">Ready to automate and assist on Windows. Tap a chip or speak below.</div>
+        </div>
+      </div>
+
+      <!-- Pinned Chat Input and Chips -->
+      <div class="bottom-pinned-bar">
+        <div class="chips-row">
+          <button class="chip-item" onclick="sendPrompt('send me a snapshot of the screen')">📸 Screen</button>
+          <button class="chip-item" onclick="sendPrompt('play some music from my music folder')">🎵 Music</button>
+          <button class="chip-item" onclick="sendPrompt('open WhatsApp and check Bund\'s chat')">💬 WhatsApp</button>
+          <button class="chip-item" onclick="sendPrompt('can you check recent posts in my placement group and tell me if i need to apply to some')">🎓 Placement</button>
+          <button class="chip-item" onclick="sendPrompt('what are you doing right now')">⚡ Status</button>
+        </div>
+
+        <div class="input-bar">
+          <button class="btn-circle btn-mic" id="micBtn" onclick="toggleMic()" title="Voice Dictation">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+              <line x1="12" y1="19" x2="12" y2="23"></line>
+              <line x1="8" y1="23" x2="16" y2="23"></line>
+            </svg>
+          </button>
+          <input type="text" class="chat-input" id="promptInput" placeholder="Message Nemo..." onkeypress="if(event.key === 'Enter') submitPrompt()">
+          <button class="btn-circle btn-send" id="sendBtn" onclick="submitPrompt()" title="Send">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <line x1="12" y1="19" x2="12" y2="5"></line>
+              <polyline points="5 12 12 5 19 12"></polyline>
+            </svg>
+          </button>
+        </div>
+      </div>
     </div>
-    <div class="status-indicator">
-      <span class="status-dot" id="statusDot"></span>
-      <span id="statusLabel">ready</span>
+
+    <!-- ==================== VIEW 2: REALTIME STREAM PANEL ==================== -->
+    <div id="streamPanel" class="view-panel">
+      <!-- HUD Stats -->
+      <div class="stream-hud">
+        <div class="hud-left">
+          <div class="live-tag">
+            <span class="live-indicator"></span>
+            LIVE
+          </div>
+          <span class="hud-stats" id="hudStats">720p • -- FPS</span>
+        </div>
+        <div class="hud-right">
+          <select class="stream-source-select" id="streamSourceSelect" onchange="changeStreamSource(this.value)">
+            <option value="webrtc">Google Meet (WebRTC)</option>
+            <option value="websocket">WebSocket (LAN)</option>
+            <option value="cloud">Cloud (Supabase)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Video / Canvas Viewport -->
+      <div class="stream-viewport" id="viewportWrap">
+        <!-- WebRTC Video Element -->
+        <video id="remoteVideo" autoplay playsinline muted></video>
+        <!-- Canvas for WebSocket / Cloud Frame Streaming -->
+        <canvas id="streamCanvas"></canvas>
+
+        <!-- Placeholder when disconnected -->
+        <div class="stream-placeholder" id="streamPlaceholder">
+          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#6b7280" stroke-width="1.5">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+            <line x1="8" y1="21" x2="16" y2="21"></line>
+            <line x1="12" y1="17" x2="12" y2="21"></line>
+          </svg>
+          <h4 id="streamNoticeTitle">Connecting to PC Screen...</h4>
+          <p id="streamNoticeBody">Waiting for laptop screen presenter or local WebSocket streamer.</p>
+          <button class="btn-stream-action" onclick="retryStreamConnection()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+            </svg>
+            Reconnect Now
+          </button>
+        </div>
+      </div>
+
+      <!-- Quick Command Bar while viewing stream -->
+      <div class="stream-command-bar">
+        <div class="stream-controls-row">
+          <button class="stream-tool-btn" onclick="captureInstantSnapshot()">📸 Snapshot</button>
+          <button class="stream-tool-btn" onclick="toggleStreamFullscreen()">⛶ Fullscreen</button>
+          <button class="stream-tool-btn" onclick="openSettings()">⚙️ Stream IP</button>
+        </div>
+        <div class="input-bar" style="background: #1e293b; border-color: #334155;">
+          <input type="text" class="chat-input" id="streamQuickInput" placeholder="Command PC while watching screen..." onkeypress="if(event.key === 'Enter') submitStreamQuickCommand()" style="color: #f8fafc;">
+          <button class="btn-circle btn-send" onclick="submitStreamQuickCommand()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <line x1="12" y1="19" x2="12" y2="5"></line>
+              <polyline points="5 12 12 5 19 12"></polyline>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Settings Modal -->
+  <div class="settings-modal" id="settingsModal" onclick="if(event.target === this) closeSettings()">
+    <div class="settings-card">
+      <div class="settings-title">
+        <span>Connection Settings</span>
+        <button class="btn-header" onclick="closeSettings()">✕</button>
+      </div>
+      <div class="settings-field">
+        <label class="settings-label">PC LAN IP or WebSocket URL</label>
+        <input type="text" class="settings-input" id="cfgWsUrl" placeholder="192.168.1.100 or ws://192.168.1.100:8765/stream">
+        <span style="font-size: 0.7rem; color: var(--text-dim); margin-top: 2px;">Used for direct WebSocket streaming on same Wi-Fi.</span>
+      </div>
+      <div class="settings-field">
+        <label class="settings-label">WebRTC Session ID</label>
+        <input type="text" class="settings-input" id="cfgSessionId" value="nemo-main">
+      </div>
+      <button class="btn-stream-action" onclick="saveSettings()" style="justify-content: center; margin-top: 6px;">
+        Save & Connect
+      </button>
     </div>
   </div>
 
-  <!-- Messages stream -->
-  <main>
-    <div id="taskFeed" class="task-feed">
-      <div class="empty-state">Send a command or tap mic to speak.</div>
-    </div>
-  </main>
-
-  <!-- Fullscreen Lightbox Modal -->
+  <!-- Lightbox Modal -->
   <div id="lightbox" class="lightbox-modal" onclick="closeLightbox()">
     <button class="lightbox-close" onclick="closeLightbox()">✕</button>
-    <img id="lightboxImg" class="lightbox-img" src="" alt="Screen Snapshot" />
-  </div>
-
-  <!-- Bottom action pill -->
-  <div class="bottom-area">
-    <div class="chips-bar">
-      <button class="chip" onclick="sendPrompt('send me a snapshot of the screen')">Screen snapshot</button>
-      <button class="chip" onclick="sendPrompt('play some music from my music folder')">Play local music</button>
-      <button class="chip" onclick="sendPrompt('can you check recent posts in my placement group and tell me if i need to apply to some')">Placement scan</button>
-      <button class="chip" onclick="sendPrompt('go apply to those with my details and later inform me once it is done')">Apply with details</button>
-      <button class="chip" onclick="sendPrompt('open WhatsApp and check Bund\'s chat')">WhatsApp Bundu</button>
-      <button class="chip" onclick="sendPrompt('can you open goutams chat in whatsapp')">WhatsApp Gautam</button>
-      <button class="chip" onclick="sendPrompt('what are you doing right now')">Status</button>
-    </div>
-
-    <div class="input-pill">
-      <button class="btn-icon btn-mic" id="micBtn" onclick="toggleMic()" title="Voice Dictation">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
-          <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-          <line x1="12" y1="19" x2="12" y2="23"></line>
-          <line x1="8" y1="23" x2="16" y2="23"></line>
-        </svg>
-      </button>
-
-      <input type="text" class="main-input" id="promptInput" placeholder="Command Nemo..." onkeypress="if(event.key === 'Enter') submitPrompt()">
-
-      <button class="btn-icon btn-send" id="sendBtn" onclick="submitPrompt()" title="Send">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="12" y1="19" x2="12" y2="5"></line>
-          <polyline points="5 12 12 5 19 12"></polyline>
-        </svg>
-      </button>
-    </div>
+    <img id="lightboxImg" class="lightbox-img" src="" alt="Screen Preview">
   </div>
 
   <script>
+    // Supabase Configuration
     const SUPABASE_URL = "https://jdrcwujxrtxcyahigbmi.supabase.co";
     const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpkcmN3dWp4cnR4Y3lhaGlnYm1pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyNjIxODAsImV4cCI6MjEwMDgzODE4MH0.siuTaRqaXE0zeZtGj-C3CcVfqa_kpSqcVYVaed6Ttss";
-
-    const headers = {
+    const HEADERS = {
       "apikey": SUPABASE_KEY,
       "Authorization": "Bearer " + SUPABASE_KEY,
       "Content-Type": "application/json",
       "Prefer": "return=representation"
     };
 
-    let recognition = null;
-    let isRecording = false;
+    // State
+    let currentTheme = localStorage.getItem('nemo_theme') || 'light';
+    let currentView = 'chat';
+    let currentStreamSource = localStorage.getItem('nemo_stream_source') || 'webrtc';
+    let wsUrl = localStorage.getItem('nemo_ws_url') || 'ws://' + window.location.hostname + ':8765/stream';
+    let sessionId = localStorage.getItem('nemo_session_id') || 'nemo-main';
 
-    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
-      const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
-      recognition = new SpeechRec();
-      recognition.continuous = false;
-      recognition.interimResults = true;
-      recognition.lang = 'en-US';
+    let knownTasks = [];
+    let peerConnection = null;
+    let webSocket = null;
+    let cloudStreamTimer = null;
+    let signalingTimer = null;
+    let lastSignalingTs = new Date(Date.now() - 10000).toISOString();
+    let frameCount = 0;
+    let fpsCalcInterval = null;
 
-      recognition.onstart = () => {
-        isRecording = true;
-        document.getElementById('micBtn').classList.add('recording');
-      };
-
-      recognition.onresult = (e) => {
-        const transcript = Array.from(e.results).map(r => r[0].transcript).join('');
-        document.getElementById('promptInput').value = transcript;
-      };
-
-      recognition.onerror = () => {
-        isRecording = false;
-        document.getElementById('micBtn').classList.remove('recording');
-      };
-
-      recognition.onend = () => {
-        isRecording = false;
-        document.getElementById('micBtn').classList.remove('recording');
-      };
+    // Apply Theme
+    function applyTheme(theme) {
+      currentTheme = theme;
+      document.documentElement.setAttribute('data-theme', theme);
+      localStorage.setItem('nemo_theme', theme);
+      const btn = document.getElementById('themeToggleBtn');
+      if (btn) btn.innerText = theme === 'dark' ? '🌙' : '☀️';
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.content = theme === 'dark' ? '#111114' : '#ffffff';
     }
 
-    function toggleMic() {
-      if (!recognition) {
-        alert("Microphone dictation is not supported on this browser.");
-        return;
-      }
-      if (isRecording) {
-        recognition.stop();
+    function toggleTheme() {
+      applyTheme(currentTheme === 'dark' ? 'light' : 'dark');
+    }
+
+    // Switch View (Chat vs Stream)
+    function switchView(view) {
+      currentView = view;
+      document.getElementById('tabChat').classList.toggle('active', view === 'chat');
+      document.getElementById('tabStream').classList.toggle('active', view === 'stream');
+
+      document.getElementById('chatPanel').classList.toggle('active', view === 'chat');
+      document.getElementById('streamPanel').classList.toggle('active', view === 'stream');
+
+      if (view === 'stream') {
+        startStream(currentStreamSource);
       } else {
-        document.getElementById('promptInput').value = '';
-        recognition.start();
+        stopStream();
       }
     }
 
-    function openLightbox(src) {
-      const modal = document.getElementById('lightbox');
-      const img = document.getElementById('lightboxImg');
-      img.src = src;
-      modal.classList.add('active');
+    // =========================================================
+    // REALTIME STREAMING ENGINES
+    // =========================================================
+
+    function changeStreamSource(source) {
+      currentStreamSource = source;
+      localStorage.setItem('nemo_stream_source', source);
+      stopStream();
+      startStream(source);
     }
 
-    function closeLightbox() {
-      const modal = document.getElementById('lightbox');
-      modal.classList.remove('active');
+    function startStream(source) {
+      stopStream();
+      startFpsCounter();
+
+      document.getElementById('streamSourceSelect').value = source;
+      document.getElementById('streamPlaceholder').style.display = 'flex';
+      document.getElementById('remoteVideo').style.display = 'none';
+      document.getElementById('streamCanvas').style.display = 'none';
+
+      if (source === 'webrtc') {
+        startWebRtcStream();
+      } else if (source === 'websocket') {
+        startWebSocketStream();
+      } else if (source === 'cloud') {
+        startCloudStream();
+      }
     }
+
+    function stopStream() {
+      if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+      }
+      if (webSocket) {
+        webSocket.close();
+        webSocket = null;
+      }
+      if (cloudStreamTimer) {
+        clearInterval(cloudStreamTimer);
+        cloudStreamTimer = null;
+      }
+      if (signalingTimer) {
+        clearInterval(signalingTimer);
+        signalingTimer = null;
+      }
+      if (fpsCalcInterval) {
+        clearInterval(fpsCalcInterval);
+        fpsCalcInterval = null;
+      }
+      document.getElementById('hudStats').innerText = "Disconnected";
+    }
+
+    function startFpsCounter() {
+      frameCount = 0;
+      if (fpsCalcInterval) clearInterval(fpsCalcInterval);
+      fpsCalcInterval = setInterval(() => {
+        const fps = frameCount;
+        frameCount = 0;
+        document.getElementById('hudStats').innerText = `720p • ${fps} FPS`;
+      }, 1000);
+    }
+
+    // Engine 1: Google Meet WebRTC Technology
+    async function startWebRtcStream() {
+      document.getElementById('streamNoticeTitle').innerText = "Connecting via WebRTC (Google Meet Tech)...";
+      document.getElementById('streamNoticeBody').innerText = "Looking for PC presenter broadcast on your laptop.";
+
+      const rtcConfig = {
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" }
+        ]
+      };
+
+      peerConnection = new RTCPeerConnection(rtcConfig);
+
+      peerConnection.ontrack = (event) => {
+        const video = document.getElementById('remoteVideo');
+        video.srcObject = event.streams[0];
+        video.style.display = 'block';
+        document.getElementById('streamPlaceholder').style.display = 'none';
+        document.getElementById('hudStats').innerText = "720p 30fps • Connected";
+      };
+
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          sendSignal('candidate', event.candidate);
+        }
+      };
+
+      // Notify PC that phone joined and wants stream
+      await sendSignal('phone_join', { timestamp: Date.now() });
+
+      // Start signaling poll
+      signalingTimer = setInterval(pollWebRtcSignals, 1000);
+    }
+
+    async function sendSignal(type, payload) {
+      try {
+        await fetch(`${SUPABASE_URL}/rest/v1/nemo_stream_signaling`, {
+          method: 'POST',
+          headers: HEADERS,
+          body: JSON.stringify({
+            session_id: sessionId,
+            sender: 'phone',
+            type: type,
+            payload: JSON.stringify(payload)
+          })
+        });
+      } catch (err) {}
+    }
+
+    async function pollWebRtcSignals() {
+      try {
+        const url = `${SUPABASE_URL}/rest/v1/nemo_stream_signaling?session_id=eq.${sessionId}&sender=eq.pc&created_at=gt.${encodeURIComponent(lastSignalingTs)}&order=created_at.asc`;
+        const res = await fetch(url, { headers: HEADERS });
+        if (!res.ok) return;
+        const msgs = await res.json();
+
+        for (const msg of msgs) {
+          lastSignalingTs = msg.created_at;
+          const payload = JSON.parse(msg.payload);
+
+          if (msg.type === 'offer' && peerConnection) {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(payload));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            await sendSignal('answer', answer);
+          } else if (msg.type === 'candidate' && peerConnection) {
+            await peerConnection.addIceCandidate(new RTCIceCandidate(payload));
+          }
+        }
+      } catch (err) {}
+    }
+
+    // Engine 2: Local High-Speed WebSocket Stream
+    function startWebSocketStream() {
+      document.getElementById('streamNoticeTitle').innerText = "Connecting to WebSocket...";
+      document.getElementById('streamNoticeBody').innerText = `Connecting to ${wsUrl}. Ensure PC is on same Wi-Fi.`;
+
+      let normalizedUrl = wsUrl;
+      if (!normalizedUrl.startsWith('ws://') && !normalizedUrl.startsWith('wss://')) {
+        normalizedUrl = `ws://${normalizedUrl}:8765/stream`;
+      }
+
+      try {
+        webSocket = new WebSocket(normalizedUrl);
+        const canvas = document.getElementById('streamCanvas');
+        const ctx = canvas.getContext('2d');
+
+        webSocket.onopen = () => {
+          document.getElementById('streamPlaceholder').style.display = 'none';
+          canvas.style.display = 'block';
+          document.getElementById('hudStats').innerText = "WebSocket LIVE";
+        };
+
+        webSocket.onmessage = async (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'frame' && data.data) {
+              frameCount++;
+              const img = new Image();
+              img.onload = () => {
+                if (canvas.width !== img.width) {
+                  canvas.width = img.width;
+                  canvas.height = img.height;
+                }
+                ctx.drawImage(img, 0, 0);
+              };
+              img.src = "data:image/jpeg;base64," + data.data;
+            }
+          } catch (err) {}
+        };
+
+        webSocket.onerror = () => {
+          document.getElementById('streamNoticeTitle').innerText = "WebSocket Disconnected";
+          document.getElementById('streamNoticeBody').innerText = `Could not reach ${normalizedUrl}. Check LAN IP in Settings.`;
+        };
+      } catch (e) {
+        document.getElementById('streamNoticeTitle').innerText = "WebSocket Error";
+      }
+    }
+
+    // Engine 3: Cloud Live Snapshot Stream
+    function startCloudStream() {
+      document.getElementById('streamNoticeTitle').innerText = "Polling Cloud Snapshots...";
+      document.getElementById('streamNoticeBody').innerText = "Fetching real-time screen captures via Supabase.";
+      const canvas = document.getElementById('streamCanvas');
+      const ctx = canvas.getContext('2d');
+
+      const fetchCloudFrame = async () => {
+        try {
+          const res = await fetch(`${SUPABASE_URL}/rest/v1/nemo_remote_tasks?prompt=ilike.*snapshot*&status=eq.completed&order=updated_at.desc&limit=1`, { headers: HEADERS });
+          if (!res.ok) return;
+          const rows = await res.json();
+          if (rows.length && rows[0].result) {
+            const match = rows[0].result.match(/data:image\/[a-zA-Z]+;base64,([A-Za-z0-9+/=]+)/);
+            if (match && match[0]) {
+              frameCount++;
+              document.getElementById('streamPlaceholder').style.display = 'none';
+              canvas.style.display = 'block';
+              const img = new Image();
+              img.onload = () => {
+                canvas.width = img.width;
+                canvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
+              };
+              img.src = match[0];
+            }
+          }
+        } catch (e) {}
+      };
+
+      fetchCloudFrame();
+      cloudStreamTimer = setInterval(fetchCloudFrame, 1500);
+    }
+
+    function retryStreamConnection() {
+      startStream(currentStreamSource);
+    }
+
+    function toggleStreamFullscreen() {
+      const elem = document.getElementById('viewportWrap');
+      if (!document.fullscreenElement) {
+        elem.requestFullscreen().catch(() => {});
+      } else {
+        document.exitFullscreen().catch(() => {});
+      }
+    }
+
+    function captureInstantSnapshot() {
+      sendPrompt("send me a snapshot of the screen");
+      alert("Snapshot requested from Windows PC. Check Chat tab in ~1 second!");
+    }
+
+    function submitStreamQuickCommand() {
+      const input = document.getElementById('streamQuickInput');
+      if (input.value.trim()) {
+        sendPrompt(input.value.trim());
+        input.value = '';
+      }
+    }
+
+    // =========================================================
+    // CHAT ENGINE & SUPABASE SYNC
+    // =========================================================
 
     async function sendPrompt(text) {
       if (!text || !text.trim()) return;
@@ -562,7 +1326,7 @@
       try {
         const res = await fetch(`${SUPABASE_URL}/rest/v1/nemo_remote_tasks`, {
           method: 'POST',
-          headers: headers,
+          headers: HEADERS,
           body: JSON.stringify({
             prompt: prompt,
             status: 'pending',
@@ -582,66 +1346,49 @@
       sendPrompt(val);
     }
 
-    function copyResult(btn, text) {
-      navigator.clipboard.writeText(text);
-      const original = btn.innerText;
-      btn.innerText = "copied";
-      setTimeout(() => { btn.innerText = original; }, 1500);
-    }
-
     async function loadTasks() {
       try {
-        const res = await fetch(`${SUPABASE_URL}/rest/v1/nemo_remote_tasks?select=*&order=created_at.desc&limit=15`, {
-          headers: {
-            "apikey": SUPABASE_KEY,
-            "Authorization": "Bearer " + SUPABASE_KEY
-          }
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/nemo_remote_tasks?order=created_at.asc&limit=35`, {
+          headers: HEADERS
         });
         if (!res.ok) return;
         const tasks = await res.json();
-        renderTasks(tasks);
-      } catch (err) {
-        console.debug("Poll error:", err);
-      }
+        renderChat(tasks);
+
+        const hasRunning = tasks.some(t => t.status === 'running' || t.status === 'pending');
+        if (hasRunning) {
+          updateStatusUI('working', 'working on pc...');
+        } else {
+          updateStatusUI('ready', 'online');
+        }
+      } catch (err) {}
     }
 
-    function updateStatusUI(state, text) {
-      const dot = document.getElementById('statusDot');
-      const label = document.getElementById('statusLabel');
-      if (state === 'working') {
-        dot.className = 'status-dot working';
-        label.innerText = text || 'executing';
-      } else {
-        dot.className = 'status-dot';
-        label.innerText = text || 'ready';
-      }
-    }
-
-    function renderTasks(tasks) {
-      const feed = document.getElementById('taskFeed');
+    function renderChat(tasks) {
+      const container = document.getElementById('chatFeed');
       if (!tasks || tasks.length === 0) {
-        feed.innerHTML = '<div class="empty-state">Send a command or tap mic to speak.</div>';
-        updateStatusUI('ready', 'ready');
+        document.getElementById('emptyChatNotice').style.display = 'block';
         return;
       }
+      document.getElementById('emptyChatNotice').style.display = 'none';
 
-      const hasActive = tasks.some(t => t.status === 'running' || t.status === 'pending');
-      if (hasActive) {
-        updateStatusUI('working', 'pc executing');
-      } else {
-        updateStatusUI('ready', 'connected');
-      }
-
-      feed.innerHTML = tasks.map(t => {
+      container.innerHTML = tasks.map(t => {
         const timeStr = new Date(t.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        const cardClass = `card ${t.status || ''}`;
 
-        let output = '';
-        if (t.result) {
+        // User Prompt Bubble (Aligned Right)
+        const userRow = `
+          <div class="msg-row user">
+            <div class="bubble">${escapeHtml(t.prompt)}</div>
+            <div class="msg-meta">${timeStr}</div>
+          </div>
+        `;
+
+        // Assistant Result Bubble (Aligned Left)
+        let aiBubbleContent = '';
+        if (t.status === 'completed' && t.result) {
           let textPortion = t.result;
           let imageHtml = '';
 
-          // Find embedded image URI (100% resilient against newlines and formatting)
           const dataUriIdx = t.result.indexOf('data:image/');
           if (dataUriIdx !== -1) {
             let endIdx = t.result.indexOf(')', dataUriIdx);
@@ -654,39 +1401,97 @@
                                   .trim();
 
             imageHtml = `
-              <div class="snapshot-wrap" onclick="openLightbox('${cleanDataUri}')">
-                <img src="${cleanDataUri}" class="snapshot-preview" alt="PC Screen Snapshot" loading="lazy" />
-                <div class="snapshot-overlay">Tap to enlarge • Live Windows Screen</div>
+              <div class="chat-snapshot-wrap" onclick="openLightbox('${cleanDataUri}')">
+                <img src="${cleanDataUri}" class="chat-snapshot-img" alt="PC Screen" loading="lazy">
+                <div class="chat-snapshot-tag">Tap to expand • PC Screen</div>
               </div>
             `;
           }
 
           const rawEscaped = escapeHtml(textPortion);
-          output = `
-            <div class="result-box">
-              <button class="copy-btn" onclick="copyResult(this, decodeURIComponent('${encodeURIComponent(t.result)}'))">copy</button>
+          aiBubbleContent = `
+            <div class="bubble">
+              <button class="copy-inline-btn" onclick="copyResult(this, decodeURIComponent('${encodeURIComponent(t.result)}'))">copy</button>
               ${imageHtml}
               ${rawEscaped ? `<div>${rawEscaped}</div>` : ''}
             </div>
+            <div class="msg-meta">
+              <span>Nemo</span> • <span>${timeStr}</span>
+            </div>
+          `;
+        } else if (t.status === 'running') {
+          aiBubbleContent = `
+            <div class="bubble running">
+              <span class="live-dot-mini" style="background: var(--accent);"></span>
+              Executing on Windows PC...
+            </div>
+          `;
+        } else if (t.status === 'pending') {
+          aiBubbleContent = `
+            <div class="bubble pending">Queued — waiting for PC listener...</div>
           `;
         } else if (t.error) {
-          output = `<div class="result-box failed">${escapeHtml(t.error)}</div>`;
-        } else if (t.status === 'running') {
-          output = `<div class="result-box running"><span>●</span> Running on Windows PC...</div>`;
-        } else if (t.status === 'pending') {
-          output = `<div class="result-box pending">Queued — waiting for PC listener...</div>`;
+          aiBubbleContent = `
+            <div class="bubble failed">${escapeHtml(t.error)}</div>
+          `;
         }
 
-        return `
-          <div class="${cardClass}">
-            <div class="card-top">
-              <div class="prompt-text">${escapeHtml(t.prompt)}</div>
-              <div class="time-badge">${timeStr}</div>
-            </div>
-            ${output}
+        const aiRow = aiBubbleContent ? `
+          <div class="msg-row assistant">
+            ${aiBubbleContent}
           </div>
-        `;
+        ` : '';
+
+        return userRow + aiRow;
       }).join('');
+
+      // Auto scroll to bottom
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function updateStatusUI(state, label) {
+      const dot = document.getElementById('headerStatusDot');
+      const text = document.getElementById('headerSubText');
+      if (text) text.innerText = label;
+      if (dot) {
+        dot.style.background = state === 'working' ? 'var(--accent)' : 'var(--success)';
+      }
+    }
+
+    function copyResult(btn, text) {
+      navigator.clipboard.writeText(text);
+      btn.innerText = 'copied!';
+      setTimeout(() => btn.innerText = 'copy', 1500);
+    }
+
+    function openLightbox(src) {
+      document.getElementById('lightboxImg').src = src;
+      document.getElementById('lightbox').classList.add('active');
+    }
+
+    function closeLightbox() {
+      document.getElementById('lightbox').classList.remove('active');
+    }
+
+    function openSettings() {
+      document.getElementById('cfgWsUrl').value = wsUrl;
+      document.getElementById('cfgSessionId').value = sessionId;
+      document.getElementById('settingsModal').classList.add('active');
+    }
+
+    function closeSettings() {
+      document.getElementById('settingsModal').classList.remove('active');
+    }
+
+    function saveSettings() {
+      wsUrl = document.getElementById('cfgWsUrl').value.trim() || wsUrl;
+      sessionId = document.getElementById('cfgSessionId').value.trim() || sessionId;
+      localStorage.setItem('nemo_ws_url', wsUrl);
+      localStorage.setItem('nemo_session_id', sessionId);
+      closeSettings();
+      if (currentView === 'stream') {
+        startStream(currentStreamSource);
+      }
     }
 
     function escapeHtml(text) {
@@ -699,7 +1504,50 @@
         .replace(/'/g, "&#039;");
     }
 
+    // Voice Dictation
+    let recognition = null;
+    let isRecording = false;
+
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognition = new SpeechRec();
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+
+      recognition.onstart = () => {
+        isRecording = true;
+        document.getElementById('micBtn').classList.add('recording');
+      };
+      recognition.onresult = (e) => {
+        const transcript = Array.from(e.results).map(r => r[0].transcript).join('');
+        document.getElementById('promptInput').value = transcript;
+      };
+      recognition.onerror = () => {
+        isRecording = false;
+        document.getElementById('micBtn').classList.remove('recording');
+      };
+      recognition.onend = () => {
+        isRecording = false;
+        document.getElementById('micBtn').classList.remove('recording');
+      };
+    }
+
+    function toggleMic() {
+      if (!recognition) {
+        alert("Speech recognition not supported on this browser.");
+        return;
+      }
+      if (isRecording) {
+        recognition.stop();
+      } else {
+        document.getElementById('promptInput').value = '';
+        recognition.start();
+      }
+    }
+
     // Initialize
+    applyTheme(currentTheme);
     loadTasks();
     setInterval(loadTasks, 2000);
   </script>

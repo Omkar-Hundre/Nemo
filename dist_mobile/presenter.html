@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nemo PC Screen Broadcaster (WebRTC)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --border: #e2e8f0;
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --accent: #0284c7;
+      --accent-hover: #0369a1;
+      --success: #10b981;
+      --danger: #ef4444;
+      --radius: 12px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .container {
+      max-width: 680px;
+      width: 100%;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.06);
+      padding: 32px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 16px;
+    }
+
+    .logo-area {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-badge {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: #0284c7;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 1rem;
+    }
+
+    .title {
+      font-size: 1.2rem;
+      font-weight: 600;
+      letter-spacing: -0.3px;
+    }
+
+    .subtitle {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+    }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.8rem;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 6px 12px;
+      border-radius: 20px;
+      background: #f1f5f9;
+      color: var(--text-muted);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #94a3b8;
+    }
+
+    .status-dot.active {
+      background: var(--success);
+      box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+      animation: pulse 1.8s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .video-preview-wrap {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #09090b;
+      border-radius: 8px;
+      overflow: hidden;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--border);
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .placeholder-msg {
+      color: #94a3b8;
+      font-size: 0.9rem;
+      text-align: center;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .controls-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      flex: 1;
+      min-width: 180px;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 0.92rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border: none;
+      transition: all 0.15s ease;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-hover);
+    }
+
+    .btn-danger {
+      background: #fee2e2;
+      color: #b91c1c;
+      border: 1px solid #fca5a5;
+    }
+
+    .btn-danger:hover {
+      background: #fecaca;
+    }
+
+    .info-box {
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      color: #166534;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 0.84rem;
+      line-height: 1.5;
+    }
+
+    .log-box {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      max-height: 120px;
+      overflow-y: auto;
+      color: #475569;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <div class="header">
+      <div class="logo-area">
+        <div class="logo-badge">N</div>
+        <div>
+          <div class="title">Nemo PC Screen Broadcaster</div>
+          <div class="subtitle">Google Meet WebRTC Technology (720p HD)</div>
+        </div>
+      </div>
+      <div class="status-pill">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Idle</span>
+      </div>
+    </div>
+
+    <div class="video-preview-wrap">
+      <video id="previewVideo" autoplay playsinline muted style="display: none;"></video>
+      <div id="placeholderMsg" class="placeholder-msg">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+          <line x1="8" y1="21" x2="16" y2="21"></line>
+          <line x1="12" y1="17" x2="12" y2="21"></line>
+        </svg>
+        <div>Click <b>Start Sharing PC Screen</b> to begin broadcasting</div>
+        <div style="font-size: 0.78rem; opacity: 0.8;">Select "Entire Screen" in the browser prompt</div>
+      </div>
+    </div>
+
+    <div class="controls-row">
+      <button class="btn btn-primary" id="startBtn" onclick="startBroadcasting()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polygon points="5 3 19 12 5 21 5 3"></polygon>
+        </svg>
+        Start Sharing PC Screen
+      </button>
+      <button class="btn btn-danger" id="stopBtn" onclick="stopBroadcasting()" style="display: none;">
+        Stop Sharing
+      </button>
+    </div>
+
+    <div class="info-box" id="infoNotice">
+      <b>Ready for Phone Connection:</b> Once sharing is started, open <b>nemo-mobile.netlify.app</b> on your phone and tap <b>🖥️ Live PC</b>. The stream will connect automatically using Google Meet's peer-to-peer WebRTC engine.
+    </div>
+
+    <div class="log-box" id="logBox">
+      [System] Broadcaster initialized. Waiting for user action...
+    </div>
+  </div>
+
+  <script>
+    const SUPABASE_URL = "https://jdrcwujxrtxcyahigbmi.supabase.co";
+    const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpkcmN3dWp4cnR4Y3lhaGlnYm1pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyNjIxODAsImV4cCI6MjEwMDgzODE4MH0.siuTaRqaXE0zeZtGj-C3CcVfqa_kpSqcVYVaed6Ttss";
+    const SESSION_ID = "nemo-main";
+
+    const rtcConfig = {
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" }
+      ]
+    };
+
+    let localStream = null;
+    let peerConnection = null;
+    let pollInterval = null;
+    let lastSignalingTimestamp = new Date(Date.now() - 5000).toISOString();
+
+    function log(msg) {
+      const box = document.getElementById('logBox');
+      const time = new Date().toLocaleTimeString();
+      box.innerHTML = `[${time}] ${msg}<br>` + box.innerHTML;
+    }
+
+    async function sendSignal(type, payload) {
+      try {
+        await fetch(`${SUPABASE_URL}/rest/v1/nemo_stream_signaling`, {
+          method: 'POST',
+          headers: {
+            "apikey": SUPABASE_KEY,
+            "Authorization": "Bearer " + SUPABASE_KEY,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            session_id: SESSION_ID,
+            sender: 'pc',
+            type: type,
+            payload: JSON.stringify(payload)
+          })
+        });
+      } catch (err) {
+        log("Signal send error: " + err.message);
+      }
+    }
+
+    async function startBroadcasting() {
+      try {
+        log("Requesting 720p screen capture display media...");
+        localStream = await navigator.mediaDevices.getDisplayMedia({
+          video: {
+            width: { ideal: 1280, max: 1280 },
+            height: { ideal: 720, max: 720 },
+            frameRate: { ideal: 30, max: 30 }
+          },
+          audio: false
+        });
+
+        document.getElementById('previewVideo').srcObject = localStream;
+        document.getElementById('previewVideo').style.display = 'block';
+        document.getElementById('placeholderMsg').style.display = 'none';
+
+        document.getElementById('startBtn').style.display = 'none';
+        document.getElementById('stopBtn').style.display = 'flex';
+
+        document.getElementById('statusDot').classList.add('active');
+        document.getElementById('statusText').innerText = "Broadcasting (720p)";
+        log("Screen capture active: 1280x720 @ 30fps. Listening for phone viewer...");
+
+        localStream.getVideoTracks()[0].onended = () => {
+          stopBroadcasting();
+        };
+
+        // Notify that PC presenter is ready
+        await sendSignal("pc_ready", { timestamp: Date.now() });
+
+        // Start listening for viewer join / offer requests
+        startSignalingListener();
+
+      } catch (err) {
+        log("Screen capture error: " + err.message);
+        alert("Could not start screen capture: " + err.message);
+      }
+    }
+
+    function stopBroadcasting() {
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        localStream = null;
+      }
+      if (peerConnection) {
+        peerConnection.close();
+        peerConnection = null;
+      }
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+      }
+
+      document.getElementById('previewVideo').style.display = 'none';
+      document.getElementById('placeholderMsg').style.display = 'flex';
+      document.getElementById('startBtn').style.display = 'flex';
+      document.getElementById('stopBtn').style.display = 'none';
+      document.getElementById('statusDot').classList.remove('active');
+      document.getElementById('statusText').innerText = "Stopped";
+      log("Broadcasting stopped.");
+    }
+
+    async function initPeerConnection() {
+      if (peerConnection) {
+        peerConnection.close();
+      }
+
+      log("Creating WebRTC RTCPeerConnection with Google STUN...");
+      peerConnection = new RTCPeerConnection(rtcConfig);
+
+      if (localStream) {
+        localStream.getTracks().forEach(track => {
+          peerConnection.addTrack(track, localStream);
+        });
+      }
+
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          sendSignal("candidate", event.candidate);
+        }
+      };
+
+      peerConnection.onconnectionstatechange = () => {
+        log("WebRTC state: " + peerConnection.connectionState);
+        if (peerConnection.connectionState === 'connected') {
+          document.getElementById('statusText').innerText = "Streaming to Phone";
+          log("Phone viewer connected via WebRTC! Live 720p streaming.");
+        }
+      };
+
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      log("SDP Offer created, sending to phone...");
+      await sendSignal("offer", offer);
+    }
+
+    function startSignalingListener() {
+      if (pollInterval) clearInterval(pollInterval);
+      pollInterval = setInterval(pollSignals, 1000);
+    }
+
+    async function pollSignals() {
+      try {
+        const url = `${SUPABASE_URL}/rest/v1/nemo_stream_signaling?session_id=eq.${SESSION_ID}&sender=eq.phone&created_at=gt.${encodeURIComponent(lastSignalingTimestamp)}&order=created_at.asc`;
+        const res = await fetch(url, {
+          headers: {
+            "apikey": SUPABASE_KEY,
+            "Authorization": "Bearer " + SUPABASE_KEY
+          }
+        });
+
+        if (!res.ok) return;
+        const messages = await res.json();
+        for (const msg of messages) {
+          lastSignalingTimestamp = msg.created_at;
+          const payload = JSON.parse(msg.payload);
+
+          if (msg.type === 'phone_join' || msg.type === 'request_offer') {
+            log("Phone requested connection. Generating WebRTC offer...");
+            await initPeerConnection();
+          } else if (msg.type === 'answer' && peerConnection) {
+            log("Received SDP Answer from phone. Finalizing connection...");
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(payload));
+          } else if (msg.type === 'candidate' && peerConnection) {
+            log("Adding ICE candidate from phone...");
+            await peerConnection.addIceCandidate(new RTCIceCandidate(payload));
+          }
+        }
+      } catch (err) {
+        // quiet poll errors
+      }
+    }
+  </script>
+</body>
+</html>

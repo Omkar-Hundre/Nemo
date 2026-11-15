@@ -1254,23 +1254,42 @@ def voice_avatar_cmd(
 @app.command("remote")
 def remote_cmd(
     portal: bool = typer.Option(False, "--portal", "-p", help="Open the mobile remote controller portal in default browser."),
+    stream: bool = typer.Option(False, "--stream", "-s", help="Start realtime 720p WebSocket screen stream & WebRTC broadcaster."),
     interval: float = typer.Option(1.5, "--interval", "-i", help="Supabase task polling interval in seconds."),
 ) -> None:
     """Listen for remote commands from your phone via Supabase and execute them on PC."""
     from nemo.remote.bridge import NemoRemoteBridge
+    from nemo.remote.streamer import get_local_ip, start_streaming_server_thread
 
     portal_path = Path(__file__).resolve().parent.parent / "remote" / "portal.html"
+    presenter_path = Path(__file__).resolve().parent.parent / "remote" / "presenter.html"
+
+    local_ip = get_local_ip()
+
+    if stream:
+        # Start WebSocket live screen streaming server in background daemon thread
+        start_streaming_server_thread(host="0.0.0.0", port=8765)
+        # Open Google Meet WebRTC broadcaster in browser
+        import webbrowser
+        webbrowser.open(presenter_path.as_uri())
 
     if portal:
         import webbrowser
         webbrowser.open(portal_path.as_uri())
 
+    stream_info = (
+        f"• [bold]Live Screen Stream:[/bold] {'[green]Active on ws://' + local_ip + ':8765/stream (720p)[/green]' if stream else '[dim]Disabled (use --stream)[/dim]'}\n"
+        f"• [bold]WebRTC Broadcaster:[/bold] {'[green]Opened in browser (Google Meet Tech)[/green]' if stream else '[dim]Disabled[/dim]'}\n"
+    )
+
     console.print(Panel(
-        f"[bold cyan]Nemo Remote Supabase Bridge[/bold cyan]\n"
+        f"[bold cyan]Nemo Remote Supabase Bridge & Screen Stream[/bold cyan]\n"
         f"• [bold]Supabase Project:[/bold] TableTalk\n"
         f"• [bold]Remote Queue:[/bold] public.nemo_remote_tasks\n"
+        f"• [bold]Local LAN IP:[/bold] {local_ip}\n"
+        f"{stream_info}"
         f"• [bold]Poll Interval:[/bold] {interval}s\n"
-        f"• [bold]Mobile Portal:[/bold] [underline]{portal_path}[/underline]\n\n"
+        f"• [bold]Mobile App:[/bold] [underline]https://nemo-mobile.netlify.app[/underline]\n\n"
         f"[dim]Listening for phone commands... Send commands from your phone to execute on PC.[/dim]",
         title="[bold green]NEMO REMOTE ACTIVE[/bold green]",
         border_style="magenta",
@@ -1281,6 +1300,14 @@ def remote_cmd(
         bridge.run_loop()
     except KeyboardInterrupt:
         console.print("\n[dim]Remote bridge stopped.[/dim]")
+
+
+@app.command("stream")
+def stream_cmd(
+    interval: float = typer.Option(1.5, "--interval", "-i", help="Supabase task polling interval in seconds."),
+) -> None:
+    """Start 720p realtime screen sharing server (WebSocket & WebRTC) for your phone."""
+    remote_cmd(portal=False, stream=True, interval=interval)
 
 
 @app.command("avatar")
@@ -1355,7 +1382,7 @@ def main() -> None:
     known_commands = {
         "chat", "setup", "version", "status", "doctor", "run", "daemon",
         "sessions", "memory", "project", "index", "ide", "worker", "task",
-        "history", "resume", "voice", "avatar", "undo", "productive", "remote",
+        "history", "resume", "voice", "avatar", "undo", "productive", "remote", "stream",
         "dependencies", "verify", "diagnose", "ask", "remember",
         "--help", "-h", "--version", "-v",
     }
