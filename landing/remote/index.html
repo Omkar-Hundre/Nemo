@@ -17,17 +17,24 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     /* Suppress Netlify Injected Floating Badge */
+    div:has(> a[href*="netlify.com"]),
+    div:has(> div > a[href*="netlify.com"]),
+    a[href*="netlify.com"],
     .netlify-badge,
     [data-netlify-badge],
     #netlify-badge,
     div[class*="netlify-badge"],
-    a[href*="netlify.com"] {
+    [class*="netlify"],
+    [id*="netlify"] {
       display: none !important;
       opacity: 0 !important;
       pointer-events: none !important;
       visibility: hidden !important;
       height: 0 !important;
       width: 0 !important;
+      position: absolute !important;
+      bottom: -9999px !important;
+      z-index: -9999 !important;
     }
 
     /* Light Theme (Default) */
@@ -966,8 +973,9 @@
         </div>
         <div class="hud-right">
           <select class="stream-source-select" id="streamSourceSelect" onchange="changeStreamSource(this.value)">
-            <option value="websocket">WebSocket (LAN)</option>
-            <option value="mjpeg">Direct Video (LAN)</option>
+            <option value="cloud_live">● Worldwide (Device-Locked)</option>
+            <option value="websocket">WebSocket (Local LAN)</option>
+            <option value="mjpeg">Direct Video (Local LAN)</option>
             <option value="cloud">Cloud Snapshot</option>
             <option value="webrtc">Google Meet (WebRTC)</option>
           </select>
@@ -991,7 +999,7 @@
             <line x1="12" y1="17" x2="12" y2="21"></line>
           </svg>
           <h4 id="streamNoticeTitle">Connecting to PC Screen...</h4>
-          <p id="streamNoticeBody">Connecting to local stream from Nemo...</p>
+          <p id="streamNoticeBody">Connecting to live stream from Nemo...</p>
           <div class="stream-action-btns">
             <button class="btn-stream-action" onclick="retryStreamConnection()">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1000,8 +1008,11 @@
               </svg>
               Reconnect
             </button>
+            <button class="btn-stream-action btn-stream-secondary" onclick="openAuthModal()">
+              🔑 Device Key
+            </button>
             <button class="btn-stream-action btn-stream-secondary" onclick="openSettings()">
-              ⚙️ Change IP
+              ⚙️ Settings
             </button>
           </div>
         </div>
@@ -1012,7 +1023,8 @@
         <div class="stream-controls-row">
           <button class="stream-tool-btn" onclick="captureInstantSnapshot()">📸 Snapshot</button>
           <button class="stream-tool-btn" onclick="toggleStreamFullscreen()">⛶ Fullscreen</button>
-          <button class="stream-tool-btn" onclick="openSettings()">⚙️ Stream IP</button>
+          <button class="stream-tool-btn" onclick="openAuthModal()">🔑 Device Key</button>
+          <button class="stream-tool-btn" onclick="openSettings()">⚙️ Settings</button>
         </div>
         <div class="input-bar" style="background: #1e293b; border-color: #334155;">
           <input type="text" class="chat-input" id="streamQuickInput" placeholder="Command PC while watching screen..." onkeypress="if(event.key === 'Enter') submitStreamQuickCommand()" style="color: #f8fafc;">
@@ -1028,6 +1040,26 @@
 
   </div>
 
+  <!-- Device Authorization Modal -->
+  <div class="settings-modal" id="authModal" onclick="if(event.target === this) closeAuthModal()">
+    <div class="settings-card">
+      <div class="settings-title">
+        <span>🔒 Authorize This Phone</span>
+        <button class="btn-header" onclick="closeAuthModal()">✕</button>
+      </div>
+      <p style="font-size: 0.82rem; color: var(--text-muted); line-height: 1.4;">
+        To securely stream your PC screen in real time from <b>anywhere in the world</b>, enter the 6-digit Device Stream Key shown in your laptop terminal:
+      </p>
+      <div class="settings-field" style="margin-top: 4px;">
+        <label class="settings-label">6-Digit Device Stream Key</label>
+        <input type="text" class="settings-input" id="authDeviceKeyInput" placeholder="e.g. 374647" maxlength="12" style="font-size: 1.25rem; text-align: center; letter-spacing: 4px; font-weight: 700; padding: 10px;">
+      </div>
+      <button class="btn-stream-action" onclick="submitAuthKey()" style="justify-content: center; margin-top: 6px; padding: 10px;">
+        Authorize & Start Stream
+      </button>
+    </div>
+  </div>
+
   <!-- Settings Modal -->
   <div class="settings-modal" id="settingsModal" onclick="if(event.target === this) closeSettings()">
     <div class="settings-card">
@@ -1036,7 +1068,12 @@
         <button class="btn-header" onclick="closeSettings()">✕</button>
       </div>
       <div class="settings-field">
-        <label class="settings-label">PC LAN IP or WebSocket URL</label>
+        <label class="settings-label">Device Stream Key (Worldwide Security)</label>
+        <input type="text" class="settings-input" id="cfgDeviceKey" placeholder="e.g. 374647" maxlength="12">
+        <span style="font-size: 0.7rem; color: var(--text-dim); margin-top: 2px;">Shown on laptop terminal when running nemo voice</span>
+      </div>
+      <div class="settings-field">
+        <label class="settings-label">PC LAN IP or WebSocket URL (Local Only)</label>
         <input type="text" class="settings-input" id="cfgWsUrl" placeholder="192.168.1.3 or ws://192.168.1.3:8765/stream">
         <span style="font-size: 0.7rem; color: var(--text-dim); margin-top: 2px;" id="cfgDetectedIpNote">Auto-detected from laptop.</span>
       </div>
@@ -1067,10 +1104,11 @@
       "Prefer": "return=representation"
     };
 
-    // State (100% Private - IP stored strictly in phone localStorage, NEVER uploaded to cloud)
+    // State (100% Private - IP and Key stored strictly in phone localStorage, NEVER leaked)
     let currentTheme = localStorage.getItem('nemo_theme') || 'light';
     let currentView = 'chat';
-    let currentStreamSource = localStorage.getItem('nemo_stream_source') || 'websocket';
+    let currentStreamSource = localStorage.getItem('nemo_stream_source') || 'cloud_live';
+    let deviceKey = localStorage.getItem('nemo_device_key') || '';
     let lanIp = localStorage.getItem('nemo_lan_ip') || '192.168.1.3';
     let wsUrl = `ws://${lanIp}:8765/stream`;
     let mjpegUrl = `http://${lanIp}:8765/live.mjpg`;
@@ -1082,8 +1120,12 @@
     let peerConnection = null;
     let webSocket = null;
     let cloudStreamTimer = null;
+    let cloudLiveHeartbeatTimer = null;
+    let cloudLiveFetchTimer = null;
     let signalingTimer = null;
     let lastSignalingTs = new Date(Date.now() - 15000).toISOString();
+    let lastFrameSeq = -1;
+    let isFetchingFrame = false;
     let frameCount = 0;
     let fpsCalcInterval = null;
 
@@ -1119,7 +1161,7 @@
     }
 
     // =========================================================
-    // REALTIME STREAMING ENGINES (Direct Local LAN & WebRTC)
+    // REALTIME STREAMING ENGINES
     // =========================================================
 
     function changeStreamSource(source) {
@@ -1140,7 +1182,9 @@
       document.getElementById('streamCanvas').style.display = 'none';
       document.getElementById('hudLiveTag').classList.add('connecting');
 
-      if (source === 'websocket') {
+      if (source === 'cloud_live') {
+        startCloudLiveStream();
+      } else if (source === 'websocket') {
         startWebSocketStream();
       } else if (source === 'mjpeg') {
         startMjpegStream();
@@ -1152,6 +1196,14 @@
     }
 
     function stopStream() {
+      if (cloudLiveHeartbeatTimer) {
+        clearInterval(cloudLiveHeartbeatTimer);
+        cloudLiveHeartbeatTimer = null;
+      }
+      if (cloudLiveFetchTimer) {
+        clearInterval(cloudLiveFetchTimer);
+        cloudLiveFetchTimer = null;
+      }
       if (peerConnection) {
         peerConnection.close();
         peerConnection = null;
@@ -1188,6 +1240,74 @@
           document.getElementById('hudStats').innerText = `720p • ${fps} FPS`;
         }
       }, 1000);
+    }
+
+    // Engine 0: Worldwide Realtime Screen Stream (Device-Locked & Encrypted over HTTPS)
+    async function startCloudLiveStream() {
+      if (!deviceKey) {
+        openAuthModal();
+        return;
+      }
+
+      document.getElementById('streamNoticeTitle').innerText = "Connecting Worldwide Stream...";
+      document.getElementById('streamNoticeBody').innerText = "Connecting securely to PC via Supabase (Zero IP exposure)...";
+      document.getElementById('streamPlaceholder').style.display = 'flex';
+      document.getElementById('streamImg').style.display = 'none';
+      document.getElementById('hudStats').innerText = "Connecting...";
+
+      const streamImg = document.getElementById('streamImg');
+
+      // 1. Send heartbeat to inform PC that authorized mobile viewer is active
+      const sendHeartbeat = async () => {
+        try {
+          await fetch(`${SUPABASE_URL}/rest/v1/nemo_device_stream?id=eq.primary&device_key=eq.${encodeURIComponent(deviceKey)}`, {
+            method: 'PATCH',
+            headers: HEADERS,
+            body: JSON.stringify({ viewer_active_at: new Date().toISOString() })
+          });
+        } catch (e) {}
+      };
+      sendHeartbeat();
+      cloudLiveHeartbeatTimer = setInterval(sendHeartbeat, 2000);
+
+      // 2. Continuous frame poll (every 450ms)
+      const fetchFrame = async () => {
+        if (isFetchingFrame) return;
+        isFetchingFrame = true;
+        try {
+          const url = `${SUPABASE_URL}/rest/v1/nemo_device_stream?id=eq.primary&device_key=eq.${encodeURIComponent(deviceKey)}&select=frame_b64,frame_seq,updated_at`;
+          const res = await fetch(url, { headers: HEADERS });
+          if (res.ok) {
+            const rows = await res.json();
+            if (rows && rows.length > 0) {
+              const row = rows[0];
+              if (row.frame_b64 && row.frame_seq !== lastFrameSeq) {
+                lastFrameSeq = row.frame_seq;
+                frameCount++;
+                streamImg.src = "data:image/jpeg;base64," + row.frame_b64;
+                if (streamImg.style.display !== 'block') {
+                  document.getElementById('streamPlaceholder').style.display = 'none';
+                  streamImg.style.display = 'block';
+                }
+                document.getElementById('hudLiveTag').classList.remove('connecting');
+                document.getElementById('hudStats').innerText = "Worldwide • Device-Locked";
+              }
+            } else {
+              // Row not found with this device_key -> unauthorized!
+              document.getElementById('streamPlaceholder').style.display = 'flex';
+              document.getElementById('streamImg').style.display = 'none';
+              document.getElementById('streamNoticeTitle').innerText = "Device Unauthorized";
+              document.getElementById('streamNoticeBody').innerText = `Device Key '${deviceKey}' does not match your laptop. Tap below to re-enter.`;
+            }
+          }
+        } catch (err) {
+        } finally {
+          isFetchingFrame = false;
+        }
+      };
+
+      fetchFrame();
+      cloudLiveFetchTimer = setInterval(fetchFrame, 450);
     }
 
     // Engine 1: High-Speed WebSocket Screen Stream (Direct LAN)
@@ -1480,19 +1600,19 @@
         // Assistant Result Bubble (Aligned Left)
         let aiBubbleContent = '';
         if (t.status === 'completed' && t.result) {
-          let textPortion = t.result;
+          let textPortion = t.result || '';
           let imageHtml = '';
 
-          const dataUriIdx = t.result.indexOf('data:image/');
-          if (dataUriIdx !== -1) {
-            let endIdx = t.result.indexOf(')', dataUriIdx);
-            if (endIdx === -1) endIdx = t.result.length;
-            const rawUri = t.result.substring(dataUriIdx, endIdx);
-            const cleanDataUri = rawUri.replace(/[\s"'\\]+/g, '');
-
-            textPortion = t.result.replace(/!\[[\s\S]*?\]\([\s\S]*?\)/g, '')
-                                  .replace(rawUri, '')
-                                  .trim();
+          // Match full data:image URI
+          const imgMatch = textPortion.match(/data:image\/[a-zA-Z]+;base64,[A-Za-z0-9+/=]+/);
+          if (imgMatch) {
+            const cleanDataUri = imgMatch[0];
+            textPortion = textPortion.replace(/!\[[^\]]*\]\([^\)]*\)/g, '')
+                                     .replace(/!\[[^\]]*\]\(/g, '')
+                                     .replace(cleanDataUri, '')
+                                     .replace(/\s*\)\s*/g, '')
+                                     .replace(/Live Desktop Snapshot/gi, '')
+                                     .trim();
 
             imageHtml = `
               <div class="chat-snapshot-wrap" onclick="openLightbox('${cleanDataUri}')">
@@ -1569,9 +1689,31 @@
       document.getElementById('lightbox').classList.remove('active');
     }
 
+    function openAuthModal() {
+      document.getElementById('authDeviceKeyInput').value = deviceKey;
+      document.getElementById('authModal').classList.add('active');
+    }
+
+    function closeAuthModal() {
+      document.getElementById('authModal').classList.remove('active');
+    }
+
+    function submitAuthKey() {
+      const val = document.getElementById('authDeviceKeyInput').value.trim();
+      if (val) {
+        deviceKey = val;
+        localStorage.setItem('nemo_device_key', deviceKey);
+        closeAuthModal();
+        if (currentView === 'stream') {
+          startStream(currentStreamSource);
+        }
+      }
+    }
+
     function openSettings() {
       document.getElementById('cfgWsUrl').value = lanIp;
       document.getElementById('cfgSessionId').value = sessionId;
+      document.getElementById('cfgDeviceKey').value = deviceKey;
       document.getElementById('settingsModal').classList.add('active');
     }
 
@@ -1580,6 +1722,11 @@
     }
 
     function saveSettings() {
+      const keyVal = document.getElementById('cfgDeviceKey').value.trim();
+      if (keyVal) {
+        deviceKey = keyVal;
+        localStorage.setItem('nemo_device_key', deviceKey);
+      }
       const userVal = document.getElementById('cfgWsUrl').value.trim();
       if (userVal) {
         lanIp = userVal.replace(/^https?:\/\//, '').replace(/^wss?:\/\//, '').replace(/\/.*$/, '').replace(/:[0-9]+$/, '');
@@ -1646,6 +1793,23 @@
         recognition.start();
       }
     }
+
+    // Dynamic removal of Netlify injected badge to keep input bar clear
+    function purgeNetlifyBadge() {
+      try {
+        const anchors = document.querySelectorAll('a[href*="netlify.com"]');
+        anchors.forEach(a => {
+          let node = a.parentElement;
+          if (node && node !== document.body && node.id !== 'appContainer') {
+            node.remove();
+          } else {
+            a.remove();
+          }
+        });
+      } catch (e) {}
+    }
+    setInterval(purgeNetlifyBadge, 500);
+    window.addEventListener('load', purgeNetlifyBadge);
 
     // Initialize
     applyTheme(currentTheme);

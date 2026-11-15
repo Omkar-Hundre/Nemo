@@ -157,14 +157,30 @@ _server_started = False
 _server_lock = threading.Lock()
 
 
+def _detect_ws_protocol() -> str:
+    """Detect available websocket implementation to prevent ModuleNotFoundError."""
+    try:
+        import wsproto
+        return "wsproto"
+    except ImportError:
+        try:
+            import websockets
+            return "websockets"
+        except ImportError:
+            return "none"
+
+
 def run_streaming_server(host: str = "0.0.0.0", port: int = 8765):
-    """Run Uvicorn streaming server with wsproto protocol."""
+    """Run Uvicorn streaming server with graceful websocket fallback."""
     local_ip = get_local_ip()
-    logger.info("Starting Nemo Screen Streamer on ws://%s:%d/stream & http://%s:%d/live.mjpg", host, port, host, port)
-    # Explicitly specify ws='wsproto' to guarantee websocket support without warnings
-    config = uvicorn.Config(app=app, host=host, port=port, ws="wsproto", log_level="warning")
-    server = uvicorn.Server(config)
-    server.run()
+    ws_protocol = _detect_ws_protocol()
+    logger.info("Starting Nemo Screen Streamer on ws://%s:%d/stream & http://%s:%d/live.mjpg (ws=%s)", host, port, host, port, ws_protocol)
+    try:
+        config = uvicorn.Config(app=app, host=host, port=port, ws=ws_protocol, log_level="warning")
+        server = uvicorn.Server(config)
+        server.run()
+    except Exception as exc:
+        logger.warning("Nemo Screen Streamer server encountered an error: %s", exc)
 
 
 def start_streaming_server_thread(host: str = "0.0.0.0", port: int = 8765) -> threading.Thread | None:

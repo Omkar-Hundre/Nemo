@@ -347,10 +347,20 @@ class NemoVoiceService:
     def _remote_worker_loop(self) -> None:
         """Polls Supabase for tasks sent remotely from phone and serves local screen stream."""
         from nemo.agent.orchestrator import AgentOrchestrator
+        from nemo.remote.auth import get_device_key
         from nemo.remote.bridge import NemoRemoteBridge
+        from nemo.remote.cloud_stream import start_cloud_streamer_thread
         from nemo.remote.streamer import start_streaming_server_thread, get_local_ip
 
-        # Automatically launch background screen streamer on port 8765 (Local LAN only - never published to cloud)
+        device_key = get_device_key()
+
+        # 1. Start Worldwide Device-Locked Cloud Streamer (Zero IP exposure, works worldwide on mobile data)
+        try:
+            start_cloud_streamer_thread(fps=2.0)
+        except Exception as exc:
+            logger.debug("Could not start cloud streamer: %s", exc)
+
+        # 2. Start optional high-fps Local LAN streamer on port 8765
         try:
             start_streaming_server_thread(host="0.0.0.0", port=8765)
         except Exception:
@@ -359,8 +369,9 @@ class NemoVoiceService:
         bridge = NemoRemoteBridge(poll_interval=1.5)
         local_ip = get_local_ip()
 
-        console.print("[dim]📲 Remote Bridge Online: Listening for phone commands via Supabase.[/dim]")
-        console.print(f"[bold cyan]🖥️ Local Screen Stream:[/bold cyan] [green]http://{local_ip}:8765/live.mjpg[/green] or [green]ws://{local_ip}:8765/stream[/green]")
+        console.print(f"[dim]📲 Remote Bridge Online: Listening for phone commands via Supabase.[/dim]")
+        console.print(f"[bold green]🔒 Live Screen Worldwide:[/bold green] [bold yellow]Device Key: {device_key}[/bold yellow] (Enter on phone to view)")
+        console.print(f"[dim]🖥️ Optional Local Stream: http://{local_ip}:8765/live.mjpg or ws://{local_ip}:8765/stream[/dim]")
 
         while not self._stop_event.is_set():
             try:

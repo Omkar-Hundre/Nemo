@@ -1224,12 +1224,16 @@ def voice_avatar_cmd(
         set_autostart(True)
         console.print("[bold green]Nemo desktop voice auto-start enabled on Windows boot.[/bold green]")
 
+    from nemo.remote.auth import get_device_key
+    device_key = get_device_key()
+
     console.print(Panel(
         f"[bold cyan]Nemo Hands-Free Voice Assistant[/bold cyan]\n"
         f"• [bold]Whisper Engine:[/bold] Local {model} (INT8)\n"
         f"• [bold]Speech Engine:[/bold] {'Windows SAPI (TTS)' if not no_tts else 'Disabled'}\n"
         f"• [bold]Wake Word:[/bold] 'Nemo' / 'Hey Nemo'\n"
         f"• [bold]Remote Bridge:[/bold] {'[green]Connected to Supabase (Mobile Ready)[/green]' if not no_remote else '[dim]Disabled[/dim]'}\n"
+        f"• [bold]Live Screen:[/bold] [bold green]Worldwide & Device-Locked[/bold green] (Key: [bold yellow]{device_key}[/bold yellow])\n"
         f"• [bold]Action Panel:[/bold] Minimal Taskbar Pill (Bottom-Right)\n"
         f"• [bold]Auto-Start:[/bold] {'[green]Enabled[/green]' if is_autostart_enabled() else '[dim]Disabled[/dim]'}\n\n"
         f"[dim]Simply speak 'Nemo, ...' anytime or dispatch commands from your phone.[/dim]",
