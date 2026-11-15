@@ -30,6 +30,16 @@ class Settings(BaseSettings):
         alias="NVIDIA_MODEL"
     )
 
+    # Supabase Remote Execution Settings
+    supabase_url: str = Field(
+        default="https://jdrcwujxrtxcyahigbmi.supabase.co",
+        alias="SUPABASE_URL",
+    )
+    supabase_key: str = Field(
+        default="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpkcmN3dWp4cnR4Y3lhaGlnYm1pIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUyNjIxODAsImV4cCI6MjEwMDgzODE4MH0.siuTaRqaXE0zeZtGj-C3CcVfqa_kpSqcVYVaed6Ttss",
+        alias="SUPABASE_KEY",
+    )
+
     # Runtime Settings
     default_shell: str = Field(default="powershell", alias="NEMO_SHELL")
     default_ide: str = Field(default="antigravity", alias="NEMO_IDE")

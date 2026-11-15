@@ -1209,8 +1209,9 @@ def voice_avatar_cmd(
     no_panel: bool = typer.Option(False, "--no-panel", help="Run in terminal without taskbar action pill."),
     no_mic: bool = typer.Option(False, "--no-mic", help="Run without microphone listener."),
     no_tts: bool = typer.Option(False, "--no-tts", help="Disable speech synthesis (TTS)."),
+    no_remote: bool = typer.Option(False, "--no-remote", help="Disable remote phone listener via Supabase."),
 ) -> None:
-    """Launch Nemo hands-free voice assistant with SAPI TTS and taskbar action panel."""
+    """Launch Nemo hands-free voice assistant with SAPI TTS, taskbar action panel, and Supabase mobile bridge."""
     from nemo.voice.autostart import set_autostart, is_autostart_enabled
     from nemo.voice.service import NemoVoiceService
 
@@ -1228,9 +1229,10 @@ def voice_avatar_cmd(
         f"• [bold]Whisper Engine:[/bold] Local {model} (INT8)\n"
         f"• [bold]Speech Engine:[/bold] {'Windows SAPI (TTS)' if not no_tts else 'Disabled'}\n"
         f"• [bold]Wake Word:[/bold] 'Nemo' / 'Hey Nemo'\n"
+        f"• [bold]Remote Bridge:[/bold] {'[green]Connected to Supabase (Mobile Ready)[/green]' if not no_remote else '[dim]Disabled[/dim]'}\n"
         f"• [bold]Action Panel:[/bold] Minimal Taskbar Pill (Bottom-Right)\n"
         f"• [bold]Auto-Start:[/bold] {'[green]Enabled[/green]' if is_autostart_enabled() else '[dim]Disabled[/dim]'}\n\n"
-        f"[dim]Simply speak 'Nemo, ...' anytime to execute commands.[/dim]",
+        f"[dim]Simply speak 'Nemo, ...' anytime or dispatch commands from your phone.[/dim]",
         title="[bold green]NEMO OS Active[/bold green]",
         border_style="cyan",
     ))
@@ -1240,12 +1242,45 @@ def voice_avatar_cmd(
         enable_voice=not no_mic,
         enable_tts=not no_tts,
         show_panel=not no_panel,
+        enable_remote=not no_remote,
     )
     try:
         service.start(block=True)
     except KeyboardInterrupt:
         service.stop()
         console.print("[dim]Nemo voice service closed.[/dim]")
+
+
+@app.command("remote")
+def remote_cmd(
+    portal: bool = typer.Option(False, "--portal", "-p", help="Open the mobile remote controller portal in default browser."),
+    interval: float = typer.Option(1.5, "--interval", "-i", help="Supabase task polling interval in seconds."),
+) -> None:
+    """Listen for remote commands from your phone via Supabase and execute them on PC."""
+    from nemo.remote.bridge import NemoRemoteBridge
+
+    portal_path = Path(__file__).resolve().parent.parent / "remote" / "portal.html"
+
+    if portal:
+        import webbrowser
+        webbrowser.open(portal_path.as_uri())
+
+    console.print(Panel(
+        f"[bold cyan]Nemo Remote Supabase Bridge[/bold cyan]\n"
+        f"• [bold]Supabase Project:[/bold] TableTalk\n"
+        f"• [bold]Remote Queue:[/bold] public.nemo_remote_tasks\n"
+        f"• [bold]Poll Interval:[/bold] {interval}s\n"
+        f"• [bold]Mobile Portal:[/bold] [underline]{portal_path}[/underline]\n\n"
+        f"[dim]Listening for phone commands... Send commands from your phone to execute on PC.[/dim]",
+        title="[bold green]NEMO REMOTE ACTIVE[/bold green]",
+        border_style="magenta",
+    ))
+
+    bridge = NemoRemoteBridge(poll_interval=interval)
+    try:
+        bridge.run_loop()
+    except KeyboardInterrupt:
+        console.print("\n[dim]Remote bridge stopped.[/dim]")
 
 
 @app.command("avatar")

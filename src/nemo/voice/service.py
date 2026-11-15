@@ -35,10 +35,12 @@ class NemoVoiceService:
         show_panel: bool = True,
         autostart: bool = False,
         enable_proactive: bool = True,
+        enable_remote: bool = True,
     ) -> None:
         self.enable_voice = enable_voice
         self.enable_tts = enable_tts
         self.enable_proactive = enable_proactive
+        self.enable_remote = enable_remote
         self.model_size = model_size
         self.show_panel = show_panel
 
@@ -51,6 +53,7 @@ class NemoVoiceService:
         self._speech_thread: threading.Thread | None = None
         self._proactive_thread: threading.Thread | None = None
         self._stdin_thread: threading.Thread | None = None
+        self._remote_thread: threading.Thread | None = None
 
         self._wake_active_until = 0.0
         self.WAKE_WINDOW_SEC = 8.0
@@ -112,7 +115,12 @@ class NemoVoiceService:
         self._stdin_thread = threading.Thread(target=self._stdin_worker_loop, daemon=True)
         self._stdin_thread.start()
 
-        # 6. Show minimal bottom-right Action Panel pill
+        # 6. Start Remote Phone Bridge (Supabase Table Listener)
+        if self.enable_remote:
+            self._remote_thread = threading.Thread(target=self._remote_worker_loop, daemon=True)
+            self._remote_thread.start()
+
+        # 7. Show minimal bottom-right Action Panel pill
         if self.panel:
             self.panel.start(block=block)
         elif block:
@@ -335,3 +343,54 @@ class NemoVoiceService:
 
         if self.panel:
             self.panel.update_status(pill_state, message)
+
+    def _remote_worker_loop(self) -> None:
+        """Polls Supabase for tasks sent remotely from phone."""
+        from nemo.agent.orchestrator import AgentOrchestrator
+        from nemo.remote.bridge import NemoRemoteBridge
+        bridge = NemoRemoteBridge(poll_interval=1.5)
+        console.print("[dim]📲 Remote Bridge Online: Listening for phone commands via Supabase.[/dim]")
+
+        while not self._stop_event.is_set():
+            try:
+                tasks = bridge.fetch_pending_tasks(limit=1)
+                if tasks:
+                    for t in tasks:
+                        t_id = str(t.get("id"))
+                        prompt = (t.get("prompt") or "").strip()
+                        if not prompt:
+                            bridge.update_task_status(t_id, status="failed", error="Empty prompt")
+                            continue
+
+                        console.print(f"\n[bold magenta][PHONE TASK][/bold magenta] From phone: '[bold]{prompt}[/bold]'")
+                        if self.panel:
+                            self.panel.update_status("working", f"Phone: {prompt[:20]}")
+                        bridge.update_task_status(t_id, status="running")
+
+                        try:
+                            orchestrator = AgentOrchestrator()
+                            if self._loop and self._loop.is_running():
+                                fut = asyncio.run_coroutine_threadsafe(
+                                    orchestrator.run(objective=prompt, on_step=self._on_agent_step),
+                                    self._loop,
+                                )
+                                state = fut.result(timeout=180.0)
+                            else:
+                                state = asyncio.run(orchestrator.run(objective=prompt, on_step=self._on_agent_step))
+
+                            ans = state.final_answer or "Success"
+                            bridge.update_task_status(t_id, status="completed", result=ans)
+                            console.print(f"[bold green][PHONE TASK DONE][/bold green] Result returned to phone.")
+                            if self.tts:
+                                speak_text = ans if len(ans) <= 80 else ans[:77] + "..."
+                                self.tts.speak(f"Completed phone command: {speak_text}")
+                            if self.panel:
+                                self.panel.update_status("sleeping", "Phone Task Done ✓")
+                        except Exception as ex:
+                            bridge.update_task_status(t_id, status="failed", error=str(ex))
+                            console.print(f"[bold red][PHONE TASK ERROR][/bold red] {ex}")
+
+                time.sleep(1.5)
+            except Exception as exc:
+                logger.debug("Remote worker poll error: %s", exc)
+                time.sleep(2.0)

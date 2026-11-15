@@ -520,3 +520,98 @@ class TestProjectDiscovery:
             assert mock_analyze.call_count >= 1
             first_prompt = mock_analyze.call_args_list[0][1]["prompt"]
             assert "Bundu" in first_prompt or "bones" in first_prompt
+
+    @pytest.mark.asyncio
+    async def test_gui_automation_send_antigravity_chat(self):
+        from nemo.tools.builtin import WindowsGuiTool
+        tool = WindowsGuiTool()
+
+        mock_win = MagicMock()
+        mock_win.window_text.return_value = "Antigravity - Workspace"
+
+        with patch.object(tool, "_find_window", return_value=mock_win), \
+             patch("win32clipboard.OpenClipboard"), \
+             patch("win32clipboard.EmptyClipboard"), \
+             patch("win32clipboard.SetClipboardText") as mock_clip, \
+             patch("win32clipboard.CloseClipboard"):
+            res = await tool.execute({
+                "action": "send_antigravity_chat",
+                "prompt": "can we connect supabase and phone commands?",
+            }, {})
+
+            assert res.success is True
+            assert res.data["action"] == "send_antigravity_chat"
+            assert res.data["prompt"] == "can we connect supabase and phone commands?"
+            mock_win.set_focus.assert_called_once()
+            # Must send ^l to focus right sidebar AI chat prompt bar
+            mock_win.type_keys.assert_any_call("^l")
+            mock_clip.assert_called_once()
+            mock_win.type_keys.assert_any_call("^v")
+            mock_win.type_keys.assert_any_call("{ENTER}")
+
+    @pytest.mark.asyncio
+    async def test_gui_automation_type_keys_chat_control_focuses_chat_bar(self):
+        from nemo.tools.builtin import WindowsGuiTool
+        tool = WindowsGuiTool()
+
+        mock_win = MagicMock()
+        mock_win.window_text.return_value = "Antigravity - Workspace"
+
+        with patch.object(tool, "_find_window", return_value=mock_win):
+            res = await tool.execute({
+                "action": "type_keys",
+                "target": "antigravity",
+                "control": "chat bar",
+                "keys": "hello{ENTER}",
+            }, {})
+
+            assert res.success is True
+            mock_win.set_focus.assert_called_once()
+            mock_win.type_keys.assert_any_call("^l")
+            mock_win.type_keys.assert_any_call("hello{ENTER}", with_spaces=True)
+
+    @pytest.mark.asyncio
+    async def test_remote_bridge_fetch_and_execute(self):
+        import json
+        from nemo.remote.bridge import NemoRemoteBridge
+        from unittest.mock import MagicMock
+        from io import BytesIO
+
+        bridge = NemoRemoteBridge(
+            supabase_url="https://test.supabase.co",
+            supabase_key="test_anon_key",
+            poll_interval=1.0,
+        )
+
+        mock_task = {
+            "id": "11111111-2222-3333-4444-555555555555",
+            "prompt": "open WhatsApp and check Bund's chat",
+            "status": "pending",
+        }
+
+        # Mock urllib.request.urlopen for fetch and updates
+        mock_resp_fetch = MagicMock()
+        mock_resp_fetch.status = 200
+        mock_resp_fetch.read.return_value = json.dumps([mock_task]).encode("utf-8")
+        mock_resp_fetch.__enter__.return_value = mock_resp_fetch
+
+        mock_resp_patch = MagicMock()
+        mock_resp_patch.status = 200
+        mock_resp_patch.read.return_value = b"{}"
+        mock_resp_patch.__enter__.return_value = mock_resp_patch
+
+        with patch("urllib.request.urlopen", side_effect=[mock_resp_fetch, mock_resp_patch, mock_resp_patch]), \
+             patch("nemo.agent.orchestrator.AgentOrchestrator.run") as mock_orch_run:
+            mock_state = MagicMock()
+            mock_state.final_answer = "Checked Bundu's chat. Found PDF module 4."
+            mock_orch_run.return_value = mock_state
+
+            tasks = bridge.fetch_pending_tasks(limit=1)
+            assert len(tasks) == 1
+            assert tasks[0]["id"] == "11111111-2222-3333-4444-555555555555"
+
+            res = await bridge.execute_task_async(tasks[0])
+            assert res["status"] == "completed"
+            assert "Bundu" in res["result"]
+            mock_orch_run.assert_called_once_with(objective="open WhatsApp and check Bund's chat")
+
